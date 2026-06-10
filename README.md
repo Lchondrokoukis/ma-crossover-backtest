@@ -38,6 +38,23 @@ more often and can bleed double-digit percentage points to the same per-trade
 cost. Note too that a cost paid early compounds away over the rest of the curve,
 so the drag on *final* wealth is larger than the naive sum of per-trade costs.
 
+## Trade-level statistics
+
+`trade_returns()` extracts every round trip — entry at a 0→1 position change,
+exit at the matching 1→0 — and compounds the daily strategy returns across it,
+so both costs are included. `report()` prints the count, win rate and average
+win/loss. A correctness invariant tested in `test_engine.py`: flat days
+contribute nothing, so compounding the round-trip returns must rebuild the
+final equity exactly.
+
+Two lessons hide here. First, the day-level and trade-level win rates answer
+different questions: trend following tends to take small whipsaw losses around
+crossings and let a few large winners run, so average win is many times the
+average loss — the shape of the distribution matters more than the win rate.
+Second, a slow crossover produces only a handful of round trips even over
+years of daily data, so any per-trade statistic carries wide uncertainty;
+distrust a win rate estimated from a few trades.
+
 ## Reading the metrics
 
 - **Total return / CAGR** — capital growth, total and annualized.
@@ -80,13 +97,13 @@ Being explicit about these is what signals quant thinking:
 
 In increasing difficulty — each makes a natural commit:
 
-1. Trade-level (not day-level) win rate.
-2. Parameter sweep over (fast, slow) with a Sharpe heatmap.
-3. Walk-forward validation (choose params in-sample, test out-of-sample).
-4. Run across a basket of assets and check the edge survives on average.
-5. Replace the crossover with an ML-based signal.
+1. Parameter sweep over (fast, slow) with a Sharpe heatmap.
+2. Walk-forward validation (choose params in-sample, test out-of-sample).
+3. Run across a basket of assets and check the edge survives on average.
+4. Replace the crossover with an ML-based signal.
 
-Done: transaction-cost modeling (the `cost` parameter).
+Done: transaction-cost modeling (the `cost` parameter); trade-level statistics
+(`trade_returns()`).
 
 ## Files
 

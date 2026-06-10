@@ -64,15 +64,38 @@ def metrics(ret):
     }
 
 
+def trade_returns(df):
+    """Return of each round-trip trade (entry 0->1 through exit 1->0).
+
+    Entries are numbered with a cumulative sum; each trade's daily strategy
+    returns are then compounded from the entry day through the exit day, so
+    entry and exit costs are both included. A trade still open at the end of
+    the sample is marked to market.
+    """
+    change = df["position"].diff()
+    tid = (change == 1).cumsum()                        # trade number, set at entry
+    mask = ((df["position"] == 1) | (change == -1)) & (tid > 0)
+    return (1 + df.loc[mask, "strat"]).groupby(tid[mask]).prod() - 1
+
+
 def report(df):
-    """Print strategy vs buy-and-hold side by side."""
+    """Print strategy vs buy-and-hold metrics, then per-trade statistics."""
     strat, bh = metrics(df["strat"]), metrics(df["ret"])
     print(f"\n{'Metric':<16}{'Strategy':>12}{'Buy & Hold':>12}")
     print("-" * 40)
     for k in strat:
         f = "{:.2f}".format if k == "Sharpe" else "{:.1%}".format
         print(f"{k:<16}{f(strat[k]):>12}{f(bh[k]):>12}")
-    print()
+
+    tr = trade_returns(df)
+    if tr.empty:
+        print("No trades.\n")
+        return
+    wins = tr > 0
+    avg_win = tr[wins].mean() if wins.any() else 0.0
+    avg_loss = tr[~wins].mean() if (~wins).any() else 0.0
+    print(f"Trades: {len(tr)}   Win rate: {wins.mean():.0%}   "
+          f"Avg win: {avg_win:+.1%}   Avg loss: {avg_loss:+.1%}\n")
 
 
 def plot(df, fast, slow, ticker, outfile="backtest.png"):
@@ -112,9 +135,8 @@ def main():
 
     n = int(net["trades"].sum())
     g, nr = gross["equity"].iloc[-1] - 1, net["equity"].iloc[-1] - 1
-    print(f"Trades (entries + exits): {n}")
-    print(f"Cost drag: {g:.1%} gross -> {nr:.1%} net  "
-          f"({g - nr:.2%} lost to {0.0005:.2%}/trade)\n")
+    print(f"Cost drag: {g:.1%} gross -> {nr:.1%} net "
+          f"over {n} position changes at {0.0005:.2%} each\n")
 
     plot(net, fast, slow, ticker)
 
