@@ -3,7 +3,7 @@ the lookahead-bias demo and the transaction-cost model."""
 
 import numpy as np
 import pandas as pd
-from backtest import backtest, metrics, report, plot
+from backtest import backtest, metrics, report, plot, trade_returns
 
 np.random.seed(42)
 n = 1500
@@ -43,5 +43,20 @@ fast_drag = (fast_gross["equity"].iloc[-1] - 1) - (fast_net["equity"].iloc[-1] -
 print(f"5/20  (fast):   {fn} trades, drag {fast_drag:.3%}")
 print("=> low-turnover strategies barely feel costs; high-turnover ones suffer.")
 
+# --- trade-level stats ---
+# Strong correctness check: flat days contribute nothing, so compounding the
+# round-trip returns must rebuild the final equity exactly.
+tr = trade_returns(net)
+assert len(tr) == int((net["position"].diff() == 1).sum())   # one per entry
+assert np.isclose((1 + tr).prod(), net["equity"].iloc[-1])   # trades rebuild equity
+
+day_wr = (net.loc[net["position"] == 1, "strat"] > 0).mean()
+wins = tr > 0
+print(f"\nDay-level win rate:   {day_wr:.0%}")
+print(f"Trade-level:          {wins.mean():.0%} of {len(tr)} round trips  "
+      f"(avg win {tr[wins].mean():+.1%}, avg loss {tr[~wins].mean():+.1%})")
+print("=> a few large winners carry the curve; and with this few round trips,")
+print("   a win rate is far too noisy to be trusted on its own.")
+
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
-print("\nOK: engine + transaction costs verified.")
+print("\nOK: engine + costs + trade stats verified.")
