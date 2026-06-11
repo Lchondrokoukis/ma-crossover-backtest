@@ -64,6 +64,25 @@ def metrics(ret):
     }
 
 
+def sweep(close, fasts, slows, cost=0.0):
+    """Sharpe ratio for every (fast, slow) pair with fast < slow.
+
+    Returns a DataFrame (rows = fast, columns = slow), ready for a heatmap.
+    Pairs with fast >= slow make no sense for a crossover and are left NaN.
+    One warning matters more than the mechanics: the best cell of this table
+    is in-sample optimisation -- some pair always looks great on the data it
+    was tuned on, by luck alone. Whether it survives on unseen data is what
+    walk-forward validation answers.
+    """
+    table = pd.DataFrame(index=fasts, columns=slows, dtype=float)
+    table.index.name, table.columns.name = "fast", "slow"
+    for f in fasts:
+        for s in slows:
+            if f < s:
+                table.loc[f, s] = metrics(backtest(close, f, s, cost)["strat"])["Sharpe"]
+    return table
+
+
 def trade_returns(df):
     """Return of each round-trip trade (entry 0->1 through exit 1->0).
 
@@ -137,6 +156,15 @@ def main():
     g, nr = gross["equity"].iloc[-1] - 1, net["equity"].iloc[-1] - 1
     print(f"Cost drag: {g:.1%} gross -> {nr:.1%} net "
           f"over {n} position changes at {0.0005:.2%} each\n")
+
+    # parameter sweep -- part 1 of the heatmap exercise
+    table = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
+                  cost=0.0005)
+    print("Sharpe by (fast, slow):")
+    print(table.round(2).to_string(na_rep="-"))
+    bf, bs = table.stack().idxmax()
+    print(f"Best in-sample: MA({bf}/{bs}), Sharpe {table.loc[bf, bs]:.2f} -- "
+          f"partly luck until proven out-of-sample.\n")
 
     plot(net, fast, slow, ticker)
 
