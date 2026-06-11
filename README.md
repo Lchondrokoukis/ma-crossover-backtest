@@ -93,17 +93,30 @@ Being explicit about these is what signals quant thinking:
   order size; this is a simplification.
 - No short selling, leverage, position sizing, or survivorship-bias control.
 
+## Parameter sweep
+
+`sweep(close, fasts, slows, cost)` computes the Sharpe ratio for every valid
+(fast, slow) pair and returns the grid as a DataFrame; `main()` prints it and
+flags the best cell. The heatmap visualisation of this grid is the next step.
+
+The warning matters more than the mechanics: picking the best cell of this
+table is **in-sample optimisation**. Some pair will always look great on the
+data it was tuned on, by luck alone. What you want to see in the grid is a
+*broad plateau* of similar Sharpes — a strategy that only works at one isolated
+parameter spike is fitted to noise. Whether the chosen pair survives on unseen
+data is a separate question, answered by walk-forward validation.
+
 ## Extensions
 
 In increasing difficulty — each makes a natural commit:
 
-1. Parameter sweep over (fast, slow) with a Sharpe heatmap.
+1. Heatmap of the sweep grid (the computation, `sweep()`, is done).
 2. Walk-forward validation (choose params in-sample, test out-of-sample).
 3. Run across a basket of assets and check the edge survives on average.
 4. Replace the crossover with an ML-based signal.
 
 Done: transaction-cost modeling (the `cost` parameter); trade-level statistics
-(`trade_returns()`).
+(`trade_returns()`); parameter-sweep grid (`sweep()`).
 
 ## Files
 

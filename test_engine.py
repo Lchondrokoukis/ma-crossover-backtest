@@ -3,7 +3,7 @@ the lookahead-bias demo and the transaction-cost model."""
 
 import numpy as np
 import pandas as pd
-from backtest import backtest, metrics, report, plot, trade_returns
+from backtest import backtest, metrics, report, plot, trade_returns, sweep
 
 np.random.seed(42)
 n = 1500
@@ -58,5 +58,12 @@ print(f"Trade-level:          {wins.mean():.0%} of {len(tr)} round trips  "
 print("=> a few large winners carry the curve; and with this few round trips,")
 print("   a win rate is far too noisy to be trusted on its own.")
 
+# --- parameter sweep: grid cells must match direct runs ---
+table = sweep(close, [10, 20, 50], [20, 100, 200], cost=COST)
+assert np.isnan(table.loc[50, 20])                       # fast >= slow skipped
+direct = metrics(backtest(close, 50, 200, cost=COST)["strat"])["Sharpe"]
+assert np.isclose(table.loc[50, 200], direct)            # cell == direct run
+print(f"\nSweep grid (Sharpe):\n{table.round(2).to_string(na_rep='-')}")
+
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
-print("\nOK: engine + costs + trade stats verified.")
+print("\nOK: engine + costs + trade stats + sweep verified.")
