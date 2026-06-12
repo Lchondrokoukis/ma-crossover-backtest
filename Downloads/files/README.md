@@ -131,16 +131,30 @@ Second, the out-of-sample Sharpe is the honest number to quote;
 the in-sample best flattering the out-of-sample result even where there is no
 structure at all.
 
+## Multi-asset basket
+
+`basket(closes, fast, slow, cost)` runs one fixed pair across a mapping of
+name → close series and returns a table of per-asset strategy metrics (with
+buy-and-hold Sharpe alongside) plus an Average row. `main()` runs the 50/200
+pair on a small ETF basket spanning US large/small caps, developed and
+emerging markets, and gold — assets the parameters were never tuned on.
+
+The lesson: good performance on a single ticker proves nothing. In
+`test_engine.py` six assets drawn from the *same driftless noise process*
+spread by more than a full Sharpe point — the best row always looks like an
+edge, and it is pure luck. An edge worth believing survives **on average**
+across assets; judge the Average row, never the best one.
+
 ## Extensions
 
 In increasing difficulty — each makes a natural commit:
 
-1. Run across a basket of assets and check the edge survives on average.
-2. Replace the crossover with an ML-based signal.
+1. Replace the crossover with an ML-based signal.
 
 Done: transaction-cost modeling (the `cost` parameter); trade-level statistics
 (`trade_returns()`); parameter sweep with Sharpe heatmap (`sweep()`,
-`heatmap()`); walk-forward validation (`walk_forward()`).
+`heatmap()`); walk-forward validation (`walk_forward()`); multi-asset basket
+(`basket()`).
 
 ## Files
 

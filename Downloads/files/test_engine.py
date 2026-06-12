@@ -4,7 +4,7 @@ the lookahead-bias demo and the transaction-cost model."""
 import numpy as np
 import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
-                      heatmap, walk_forward)
+                      heatmap, walk_forward, basket)
 
 np.random.seed(42)
 n = 1500
@@ -87,5 +87,24 @@ print(f"\nWalk-forward on noise:  best in-sample Sharpe {best_in_sample:+.2f}  "
 print("=> on a random walk the in-sample best is always flattering;")
 print("   the out-of-sample number is the one you can believe.")
 
+# --- basket: rows must match direct runs, Average must be the mean ---
+rng = np.random.default_rng(7)
+noise = {f"A{i}": pd.Series(
+    100 * np.exp(np.cumsum(rng.normal(0, 0.20 / np.sqrt(252), n))),
+    index=close.index) for i in range(6)}
+tab = basket(noise, 50, 200, cost=COST)
+direct = metrics(backtest(noise["A0"], 50, 200, cost=COST)["strat"])["Sharpe"]
+assert np.isclose(tab.loc["A0", "Sharpe"], direct)
+assert np.isclose(tab.loc["Average", "Sharpe"], tab["Sharpe"].iloc[:-1].mean())
+
+# the lesson: six assets from the SAME driftless process still spread widely,
+# so the best single row always looks like an edge. The average is the test.
+spread = tab["Sharpe"].iloc[:-1].max() - tab["Sharpe"].iloc[:-1].min()
+print(f"\nBasket of driftless noise: per-asset Sharpe spread {spread:.2f}, "
+      f"average {tab.loc['Average', 'Sharpe']:+.2f}")
+print(tab.round(2).to_string())
+print("=> the best row is luck, not edge; only the Average row means anything.")
+
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
-print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward verified.")
+print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward "
+      "+ basket verified.")

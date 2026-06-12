@@ -89,6 +89,24 @@ def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
     return pd.concat(oos), pd.DataFrame(rows)
 
 
+def basket(closes, fast, slow, cost=0.0):
+    """Run one (fast, slow) pair across a mapping of name -> close Series.
+
+    Returns one row of strategy metrics per asset (buy-and-hold Sharpe
+    alongside) plus an "Average" row. An edge worth believing survives on
+    average across assets it was never tuned on; any single row may be luck.
+    """
+    rows = {}
+    for name, close in closes.items():
+        close = close.dropna()
+        m = metrics(backtest(close, fast, slow, cost)["strat"])
+        m["B&H Sharpe"] = metrics(close.pct_change().fillna(0))["Sharpe"]
+        rows[name] = m
+    table = pd.DataFrame(rows).T
+    table.loc["Average"] = table.mean()
+    return table
+
+
 def trade_returns(df):
     """Compounded return of each round-trip trade, including entry/exit costs.
 
@@ -200,6 +218,17 @@ def main():
     print(f"Out-of-sample: Sharpe {m['Sharpe']:.2f}, total {m['Total return']:.1%} "
           f"over {len(oos)} days -- judge the strategy on this, not on the "
           f"best in-sample cell above.\n")
+
+    # basket: same fixed pair across assets it was never tuned on
+    tickers = ["SPY", "QQQ", "IWM", "EFA", "EEM", "GLD"]
+    closes = {t: load_prices(t, start, end) for t in tickers}
+    tab = basket(closes, fast, slow, cost=0.0005)
+    print(f"MA({fast}/{slow}) across a basket:")
+    print(tab.to_string(formatters={
+        c: ("{:.2f}".format if "Sharpe" in c else "{:.1%}".format)
+        for c in tab.columns}))
+    print("Judge the Average row, not the best one -- a single good ticker "
+          "proves nothing.\n")
 
     plot(net, fast, slow, ticker)
 
