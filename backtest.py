@@ -142,6 +142,35 @@ def plot(df, fast, slow, ticker, outfile="backtest.png"):
     print(f"Saved plot -> {outfile}")
 
 
+def heatmap(table, outfile="sweep.png"):
+    """Plot the sweep grid: one cell per (fast, slow) pair, colour = Sharpe.
+
+    What to look for is a broad plateau of similar colour. A strategy that
+    only shines at one isolated cell is fitted to noise, not to structure;
+    a wide region of decent Sharpes means the result is robust to the exact
+    parameter choice.
+    """
+    data = np.ma.masked_invalid(table.values.astype(float))
+    cmap = plt.get_cmap("RdYlGn").copy()
+    cmap.set_bad("#e8e6dc")  # invalid pairs (fast >= slow) in neutral grey
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    im = ax.imshow(data, cmap=cmap, aspect="auto")
+    ax.set_xticks(range(len(table.columns)), table.columns)
+    ax.set_yticks(range(len(table.index)), table.index)
+    ax.set(xlabel="slow window", ylabel="fast window",
+           title="Sharpe ratio by (fast, slow)")
+    for i in range(len(table.index)):          # annotate each valid cell
+        for j in range(len(table.columns)):
+            if not np.isnan(table.iat[i, j]):
+                ax.text(j, i, f"{table.iat[i, j]:.2f}",
+                        ha="center", va="center", fontsize=9)
+    fig.colorbar(im, ax=ax, label="Sharpe")
+    fig.tight_layout()
+    fig.savefig(outfile, dpi=130)
+    print(f"Saved heatmap -> {outfile}")
+
+
 def main():
     ticker, start, end, fast, slow = "SPY", "2015-01-01", "2024-12-31", 50, 200
     close = load_prices(ticker, start, end)
@@ -157,7 +186,7 @@ def main():
     print(f"Cost drag: {g:.1%} gross -> {nr:.1%} net "
           f"over {n} position changes at {0.0005:.2%} each\n")
 
-    # parameter sweep -- part 1 of the heatmap exercise
+    # parameter sweep: Sharpe across the (fast, slow) grid, plus its heatmap
     table = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
                   cost=0.0005)
     print("Sharpe by (fast, slow):")
@@ -165,6 +194,7 @@ def main():
     bf, bs = table.stack().idxmax()
     print(f"Best in-sample: MA({bf}/{bs}), Sharpe {table.loc[bf, bs]:.2f} -- "
           f"partly luck until proven out-of-sample.\n")
+    heatmap(table)
 
     plot(net, fast, slow, ticker)
 
