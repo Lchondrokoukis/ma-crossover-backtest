@@ -145,16 +145,38 @@ spread by more than a full Sharpe point — the best row always looks like an
 edge, and it is pure luck. An edge worth believing survives **on average**
 across assets; judge the Average row, never the best one.
 
+## ML-based signal
+
+`ml_backtest(close, cost, train, test)` replaces the hand-coded crossover
+with a learned one: a logistic regression over simple features
+(`ml_features()` — momentum at three horizons, the 50/200 MA gap, recent
+volatility) is refit every `test` days on the prior `train` days and
+predicts whether the *next* day's return is positive; the strategy is long
+on predicted-up days. The accounting (costs, equity, trade stats) is
+identical to `backtest()`.
+
+Lookahead can sneak into an ML signal in three places, and all three are
+closed: features on day t use only closes up to t; the label for day t is
+the day t+1 return, so the last training row is dropped (its label is the
+first test day's return); and the prediction made at the close of day t is
+acted on at day t+1 — the same `.shift(1)` as the crossover.
+
+Don't expect magic, and `test_engine.py` quantifies why: on driftless noise
+the out-of-sample hit rate is ~49% — a coin flip, exactly as it should be.
+Daily direction is barely predictable; the exercise is the harness, not the
+alpha. Any signal, learned or hand-coded, plugs into the same honest
+accounting.
+
 ## Extensions
 
-In increasing difficulty — each makes a natural commit:
-
-1. Replace the crossover with an ML-based signal.
-
-Done: transaction-cost modeling (the `cost` parameter); trade-level statistics
+All three original extensions are done, each as its own commit:
+transaction-cost modeling (the `cost` parameter); trade-level statistics
 (`trade_returns()`); parameter sweep with Sharpe heatmap (`sweep()`,
 `heatmap()`); walk-forward validation (`walk_forward()`); multi-asset basket
-(`basket()`).
+(`basket()`); ML-based signal (`ml_backtest()`).
+
+Natural next steps: short selling / long-short positions, volatility-targeted
+position sizing, or a survivorship-bias-free universe.
 
 ## Files
 

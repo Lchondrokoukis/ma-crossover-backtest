@@ -89,6 +89,53 @@ def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
     return pd.concat(oos), pd.DataFrame(rows)
 
 
+def ml_features(close):
+    """Features known at the close of day t: momentum at three horizons,
+    the MA gap the crossover trades on, and recent volatility."""
+    ret = close.pct_change()
+    return pd.DataFrame({
+        "mom_5": close.pct_change(5),
+        "mom_20": close.pct_change(20),
+        "mom_60": close.pct_change(60),
+        "ma_gap": close.rolling(50).mean() / close.rolling(200).mean() - 1,
+        "vol_20": ret.rolling(20).std(),
+    })
+
+
+def ml_backtest(close, cost=0.0, train=3 * YEAR, test=YEAR):
+    """Replace the crossover with a learned signal, same discipline throughout.
+
+    A logistic regression is refit every `test` days on the prior `train`
+    days, predicting whether the NEXT day's return is positive; the strategy
+    is long on days the model says up. Lookahead is closed at three places:
+    features on day t use only closes up to t; the last training row is
+    dropped (its label is the first test day's return); the prediction made
+    at the close of day t is acted on at t+1 -- the same .shift(1) as the
+    crossover. Returns the same frame as backtest(), minus the MA columns.
+    """
+    from sklearn.linear_model import LogisticRegression
+
+    X = ml_features(close)
+    ret = close.pct_change().fillna(0)
+    y = (ret.shift(-1) > 0).astype(int)             # label: is tomorrow up?
+
+    signal = pd.Series(0.0, index=close.index)
+    for start in range(train, len(close), test):
+        fit = X.iloc[start - train:start - 1].dropna().index
+        model = LogisticRegression(max_iter=1000).fit(X.loc[fit], y.loc[fit])
+        pred = X.iloc[start:start + test].dropna().index
+        signal.loc[pred] = model.predict(X.loc[pred])
+
+    position = signal.shift(1).fillna(0)            # act the day after the signal
+    trades = position.diff().abs().fillna(0)
+    strat = position * ret - cost * trades
+    return pd.DataFrame({
+        "close": close, "position": position, "ret": ret, "trades": trades,
+        "strat": strat, "equity": (1 + strat).cumprod(),
+        "equity_bh": (1 + ret).cumprod(),
+    })
+
+
 def basket(closes, fast, slow, cost=0.0):
     """Run one (fast, slow) pair across a mapping of name -> close Series.
 
@@ -229,6 +276,11 @@ def main():
         for c in tab.columns}))
     print("Judge the Average row, not the best one -- a single good ticker "
           "proves nothing.\n")
+
+    # ML signal: same walk-forward discipline, learned instead of hand-coded
+    ml = ml_backtest(close, cost=0.0005)
+    print("ML signal (logistic regression, refit each year on the prior 3):")
+    report(ml)
 
     plot(net, fast, slow, ticker)
 
