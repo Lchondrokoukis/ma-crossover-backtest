@@ -26,23 +26,15 @@ def load_prices(ticker, start, end):
 
 
 def backtest(close, fast, slow, cost=0.0):
-    """Run the strategy and return everything needed to analyse and plot it.
+    """Return DataFrame of signals, returns, and equity curves.
 
-    cost is the per-trade transaction cost as a fraction of traded value
-    (e.g. 0.0005 = 5 basis points), charged on every entry and every exit.
-
-    The .shift(1) is the line that matters most: the signal on day t is built
-    from Close[t], which you only know once the day has closed -- so you can
-    act on it no earlier than day t+1. Without the shift you trade on
-    information you would not have had in real time (lookahead bias) and the
-    results look impressive but are fake.
+    cost: per-trade fraction of traded value (e.g. 0.0005 = 5 bps).
+    .shift(1) prevents lookahead: signal built on Close[t] is traded at t+1.
     """
     ma_fast, ma_slow = close.rolling(fast).mean(), close.rolling(slow).mean()
     position = (ma_fast > ma_slow).astype(int).shift(1).fillna(0)
     ret = close.pct_change().fillna(0)
-
-    # trades: 1 on each entry and each exit, 0 while holding. The position
-    # moves between 0 and 1, so |change| is the fraction of capital traded.
+    # |diff| is the fraction of capital traded on each position change
     trades = position.diff().abs().fillna(0)
     strat = position * ret - cost * trades  # subtract cost on every trade
     return pd.DataFrame({
@@ -67,12 +59,7 @@ def metrics(ret):
 def sweep(close, fasts, slows, cost=0.0):
     """Sharpe ratio for every (fast, slow) pair with fast < slow.
 
-    Returns a DataFrame (rows = fast, columns = slow), ready for a heatmap.
-    Pairs with fast >= slow make no sense for a crossover and are left NaN.
-    One warning matters more than the mechanics: the best cell of this table
-    is in-sample optimisation -- some pair always looks great on the data it
-    was tuned on, by luck alone. Whether it survives on unseen data is what
-    walk-forward validation answers.
+    Returns a DataFrame (rows=fast, cols=slow); invalid pairs are NaN.
     """
     table = pd.DataFrame(index=fasts, columns=slows, dtype=float)
     table.index.name, table.columns.name = "fast", "slow"
@@ -84,18 +71,10 @@ def sweep(close, fasts, slows, cost=0.0):
 
 
 def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
-    """Choose (fast, slow) in-sample, then trade it on the NEXT period.
+    """Rolling train/test: pick the best-Sharpe pair in-sample, trade it out-of-sample.
 
-    The sample is split into rolling folds: on each train window the sweep
-    picks the pair with the best Sharpe, and that pair alone is traded over
-    the following test window. The stitched test returns are genuinely
-    out-of-sample: every parameter choice is made using only data available
-    before the period it is traded in. The MAs for a test window are warmed
-    up on earlier prices -- price history is known in real time; it is the
-    CHOICE of parameters that must not peek.
-
-    Returns (oos, folds): the stitched out-of-sample return series, and a
-    DataFrame with one row per fold (chosen pair, train and test Sharpe).
+    Returns (oos, folds): stitched out-of-sample returns and a per-fold summary.
+    MAs are warmed on all prior prices so the first test bar is never NaN.
     """
     oos, rows = [], []
     for start in range(train, len(close) - 1, test):
@@ -111,12 +90,9 @@ def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
 
 
 def trade_returns(df):
-    """Return of each round-trip trade (entry 0->1 through exit 1->0).
+    """Compounded return of each round-trip trade, including entry/exit costs.
 
-    Entries are numbered with a cumulative sum; each trade's daily strategy
-    returns are then compounded from the entry day through the exit day, so
-    entry and exit costs are both included. A trade still open at the end of
-    the sample is marked to market.
+    An open position at the end of the sample is marked to market.
     """
     change = df["position"].diff()
     tid = (change == 1).cumsum()                        # trade number, set at entry
@@ -170,13 +146,7 @@ def plot(df, fast, slow, ticker, outfile="backtest.png"):
 
 
 def heatmap(table, outfile="sweep.png"):
-    """Plot the sweep grid: one cell per (fast, slow) pair, colour = Sharpe.
-
-    What to look for is a broad plateau of similar colour. A strategy that
-    only shines at one isolated cell is fitted to noise, not to structure;
-    a wide region of decent Sharpes means the result is robust to the exact
-    parameter choice.
-    """
+    """Save a colour grid of Sharpe ratios across the (fast, slow) parameter space."""
     data = np.ma.masked_invalid(table.values.astype(float))
     cmap = plt.get_cmap("RdYlGn").copy()
     cmap.set_bad("#e8e6dc")  # invalid pairs (fast >= slow) in neutral grey
@@ -213,7 +183,6 @@ def main():
     print(f"Cost drag: {g:.1%} gross -> {nr:.1%} net "
           f"over {n} position changes at {0.0005:.2%} each\n")
 
-    # parameter sweep: Sharpe across the (fast, slow) grid, plus its heatmap
     table = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
                   cost=0.0005)
     print("Sharpe by (fast, slow):")
@@ -223,7 +192,6 @@ def main():
           f"partly luck until proven out-of-sample.\n")
     heatmap(table)
 
-    # walk-forward: choose the pair in-sample, trade it out-of-sample
     oos, folds = walk_forward(close, [5, 10, 20, 30, 50, 80],
                               [20, 50, 100, 150, 200, 250], cost=0.0005)
     print("Walk-forward folds:")
