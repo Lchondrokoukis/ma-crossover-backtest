@@ -4,7 +4,7 @@ the lookahead-bias demo and the transaction-cost model."""
 import numpy as np
 import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
-                      heatmap, walk_forward, basket)
+                      heatmap, walk_forward, basket, ml_backtest)
 
 np.random.seed(42)
 n = 1500
@@ -105,6 +105,32 @@ print(f"\nBasket of driftless noise: per-asset Sharpe spread {spread:.2f}, "
 print(tab.round(2).to_string())
 print("=> the best row is luck, not edge; only the Average row means anything.")
 
+# --- ML signal: structural no-lookahead invariants, then the humbling ---
+ml = ml_backtest(close, cost=COST)
+assert ml["position"].isin([0, 1]).all()
+assert not ml["equity"].isna().any()
+# the first fit happens at day 756 and its prediction is acted on a day
+# later, so no position can exist on or before day 756
+assert (ml["position"].iloc[:757] == 0).all()
+
+held = ml["position"].iloc[757:]
+hit = (held == (ml["ret"].iloc[757:] > 0)).mean()    # direction hit rate OOS
+print(f"\nML signal on the base series: hit rate {hit:.1%}, "
+      f"long {held.mean():.0%} of days, Sharpe "
+      f"{metrics(ml['strat'])['Sharpe']:.2f}")
+
+# on driftless noise the model has nothing to learn: hit rate ~ coin flip
+walk = pd.Series(100 * np.exp(np.cumsum(
+    np.random.default_rng(1).normal(0, 0.20 / np.sqrt(252), n))),
+    index=close.index)
+mln = ml_backtest(walk, cost=COST)
+hitn = (mln["position"].iloc[757:] == (mln["ret"].iloc[757:] > 0)).mean()
+print(f"ML signal on driftless noise: hit rate {hitn:.1%}, Sharpe "
+      f"{metrics(mln['strat'])['Sharpe']:.2f}")
+assert 0.40 < hitn < 0.60, "on noise the hit rate must be near a coin flip"
+print("=> the harness is the exercise, not the alpha: daily direction is")
+print("   close to a coin flip, and the same accounting exposes that honestly.")
+
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward "
-      "+ basket verified.")
+      "+ basket + ML signal verified.")
