@@ -3,7 +3,7 @@ the lookahead-bias demo and the transaction-cost model."""
 
 import numpy as np
 import pandas as pd
-from backtest import backtest, metrics, report, plot, trade_returns, sweep
+from backtest import backtest, metrics, report, plot, trade_returns, sweep, heatmap
 
 np.random.seed(42)
 n = 1500
@@ -65,5 +65,10 @@ direct = metrics(backtest(close, 50, 200, cost=COST)["strat"])["Sharpe"]
 assert np.isclose(table.loc[50, 200], direct)            # cell == direct run
 print(f"\nSweep grid (Sharpe):\n{table.round(2).to_string(na_rep='-')}")
 
+# --- heatmap renders on a denser grid ---
+dense = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
+              cost=COST)
+heatmap(dense, outfile="test_sweep.png")
+
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
-print("\nOK: engine + costs + trade stats + sweep verified.")
+print("\nOK: engine + costs + trade stats + sweep + heatmap verified.")
