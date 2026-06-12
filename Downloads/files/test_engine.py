@@ -3,7 +3,8 @@ the lookahead-bias demo and the transaction-cost model."""
 
 import numpy as np
 import pandas as pd
-from backtest import backtest, metrics, report, plot, trade_returns, sweep, heatmap
+from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
+                      heatmap, walk_forward)
 
 np.random.seed(42)
 n = 1500
@@ -70,5 +71,22 @@ dense = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
               cost=COST)
 heatmap(dense, outfile="test_sweep.png")
 
+# --- walk-forward on pure noise: the honest number is the OOS one ---
+oos, folds = walk_forward(close, [10, 20, 50], [50, 100, 200],
+                          train=504, test=252, cost=COST)
+# the stitched OOS series tiles everything after the first train window
+assert len(oos) == len(close) - 504
+assert (oos.index == close.index[504:]).all()
+# each fold's choice must be reproducible from its train window alone
+t0 = sweep(close.iloc[:504], [10, 20, 50], [50, 100, 200], cost=COST)
+assert (folds.iloc[0]["fast"], folds.iloc[0]["slow"]) == t0.stack().idxmax()
+
+best_in_sample = sweep(close, [10, 20, 50], [50, 100, 200], cost=COST).stack().max()
+oos_sharpe = metrics(oos)["Sharpe"]
+print(f"\nWalk-forward on noise:  best in-sample Sharpe {best_in_sample:+.2f}  "
+      f"vs out-of-sample {oos_sharpe:+.2f}")
+print("=> on a random walk the in-sample best is always flattering;")
+print("   the out-of-sample number is the one you can believe.")
+
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
-print("\nOK: engine + costs + trade stats + sweep + heatmap verified.")
+print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward verified.")

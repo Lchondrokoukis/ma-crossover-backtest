@@ -83,6 +83,33 @@ def sweep(close, fasts, slows, cost=0.0):
     return table
 
 
+def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
+    """Choose (fast, slow) in-sample, then trade it on the NEXT period.
+
+    The sample is split into rolling folds: on each train window the sweep
+    picks the pair with the best Sharpe, and that pair alone is traded over
+    the following test window. The stitched test returns are genuinely
+    out-of-sample: every parameter choice is made using only data available
+    before the period it is traded in. The MAs for a test window are warmed
+    up on earlier prices -- price history is known in real time; it is the
+    CHOICE of parameters that must not peek.
+
+    Returns (oos, folds): the stitched out-of-sample return series, and a
+    DataFrame with one row per fold (chosen pair, train and test Sharpe).
+    """
+    oos, rows = [], []
+    for start in range(train, len(close) - 1, test):
+        table = sweep(close.iloc[start - train:start], fasts, slows, cost)
+        f, s = table.stack().idxmax()
+        # run on all history up to the test end so the MAs are warm on day one
+        seg = backtest(close.iloc[:start + test], f, s, cost)["strat"].iloc[start:]
+        oos.append(seg)
+        rows.append({"test_start": close.index[start].date(), "fast": f,
+                     "slow": s, "train_sharpe": table.loc[f, s],
+                     "test_sharpe": metrics(seg)["Sharpe"]})
+    return pd.concat(oos), pd.DataFrame(rows)
+
+
 def trade_returns(df):
     """Return of each round-trip trade (entry 0->1 through exit 1->0).
 
@@ -195,6 +222,16 @@ def main():
     print(f"Best in-sample: MA({bf}/{bs}), Sharpe {table.loc[bf, bs]:.2f} -- "
           f"partly luck until proven out-of-sample.\n")
     heatmap(table)
+
+    # walk-forward: choose the pair in-sample, trade it out-of-sample
+    oos, folds = walk_forward(close, [5, 10, 20, 30, 50, 80],
+                              [20, 50, 100, 150, 200, 250], cost=0.0005)
+    print("Walk-forward folds:")
+    print(folds.to_string(index=False))
+    m = metrics(oos)
+    print(f"Out-of-sample: Sharpe {m['Sharpe']:.2f}, total {m['Total return']:.1%} "
+          f"over {len(oos)} days -- judge the strategy on this, not on the "
+          f"best in-sample cell above.\n")
 
     plot(net, fast, slow, ticker)
 
