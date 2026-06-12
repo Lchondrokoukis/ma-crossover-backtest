@@ -45,8 +45,7 @@ print(f"5/20  (fast):   {fn} trades, drag {fast_drag:.3%}")
 print("=> low-turnover strategies barely feel costs; high-turnover ones suffer.")
 
 # --- trade-level stats ---
-# Strong correctness check: flat days contribute nothing, so compounding the
-# round-trip returns must rebuild the final equity exactly.
+# flat days contribute nothing, so compounding round-trip returns rebuilds final equity
 tr = trade_returns(net)
 assert len(tr) == int((net["position"].diff() == 1).sum())   # one per entry
 assert np.isclose((1 + tr).prod(), net["equity"].iloc[-1])   # trades rebuild equity
