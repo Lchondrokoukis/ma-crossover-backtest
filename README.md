@@ -111,17 +111,36 @@ that only shines at one isolated spike is fitted to noise. Whether the chosen
 pair survives on unseen data is a separate question, answered by walk-forward
 validation.
 
+## Walk-forward validation
+
+`walk_forward(close, fasts, slows, train=..., test=..., cost=...)` splits the
+sample into rolling folds: on each train window (default 4 years) the sweep
+picks the best (fast, slow) pair, and that pair alone is traded over the
+following test window (default 1 year). The stitched test returns are
+genuinely out-of-sample — every parameter choice is made using only data
+available before the period it is traded in. The MAs for a test window are
+warmed up on earlier prices: price history is known in real time, it is the
+*choice* of parameters that must not peek.
+
+`main()` prints one row per fold (the chosen pair, its train Sharpe and its
+test Sharpe) and the out-of-sample metrics for the stitched series. Two things
+to notice. First, the chosen pair usually *changes* from fold to fold — that
+instability is itself evidence that the in-sample optimum is partly noise.
+Second, the out-of-sample Sharpe is the honest number to quote;
+`test_engine.py` runs the same procedure on a synthetic random walk and shows
+the in-sample best flattering the out-of-sample result even where there is no
+structure at all.
+
 ## Extensions
 
 In increasing difficulty — each makes a natural commit:
 
-1. Walk-forward validation (choose params in-sample, test out-of-sample).
-2. Run across a basket of assets and check the edge survives on average.
-3. Replace the crossover with an ML-based signal.
+1. Run across a basket of assets and check the edge survives on average.
+2. Replace the crossover with an ML-based signal.
 
 Done: transaction-cost modeling (the `cost` parameter); trade-level statistics
 (`trade_returns()`); parameter sweep with Sharpe heatmap (`sweep()`,
-`heatmap()`).
+`heatmap()`); walk-forward validation (`walk_forward()`).
 
 ## Files
 
