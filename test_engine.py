@@ -4,7 +4,7 @@ the lookahead-bias demo and the transaction-cost model."""
 import numpy as np
 import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
-                      heatmap, walk_forward, basket, ml_backtest)
+                      heatmap, walk_forward, basket, ml_backtest, vol_target)
 
 np.random.seed(42)
 n = 1500
@@ -150,6 +150,21 @@ assert 0.40 < hitn < 0.60, "on noise the hit rate must be near a coin flip"
 print("=> the harness is the exercise, not the alpha: daily direction is")
 print("   close to a coin flip, and the same accounting exposes that honestly.")
 
+# --- volatility targeting: leverage moves risk, not edge ---
+vt = vol_target(close, 50, 200, target=0.15, cost=0.0)
+base = backtest(close, 50, 200, cost=0.0)
+# leverage cannot create exposure where the crossover is flat
+assert (vt.loc[base["position"] == 0, "position"] == 0).all()
+# constant leverage scales returns but leaves Sharpe identical -- targeting
+# reshapes risk, it cannot manufacture alpha
+assert np.isclose(metrics(3 * base["strat"])["Sharpe"], metrics(base["strat"])["Sharpe"])
+# on invested days the targeted vol sits closer to the 15% target than the raw
+inv = base["position"] == 1
+raw_vol = base.loc[inv, "ret"].std() * np.sqrt(252)
+vt_vol = vt.loc[inv, "strat"].std() * np.sqrt(252)   # gross: strat == position*ret
+assert abs(vt_vol - 0.15) < abs(raw_vol - 0.15)
+print(f"\nVol targeting: invested vol {raw_vol:.0%} raw -> {vt_vol:.0%} targeted (target 15%)")
+
 # --- robustness: degenerate inputs are handled cleanly, not cryptically ---
 short = close.iloc[:100]
 for bad in (lambda: walk_forward(short, [10, 20], [50, 100], train=504, test=252),
@@ -179,4 +194,4 @@ print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat 
 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward "
-      "+ basket + ML signal verified.")
+      "+ basket + ML signal + vol targeting verified.")

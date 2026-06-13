@@ -182,6 +182,30 @@ def basket(closes, fast, slow, cost=0.0):
     return table
 
 
+def vol_target(close, fast, slow, target=0.15, cost=0.0, vol_window=20, max_lev=3.0):
+    """Size the long/flat crossover so realized volatility tracks `target`.
+
+    The crossover gives a 0/1 signal; here we lever it. Each day we estimate
+    annualized volatility from the trailing `vol_window` daily returns and set
+    leverage = target / realized_vol (capped at `max_lev`), so a calm market is
+    geared up toward the target and a turbulent one is scaled down. Both the
+    signal and the vol estimate use only past data (.shift(1)), so there is no
+    lookahead. The returned `position` is continuous (>= 0), not 0/1.
+
+    The lesson: vol targeting adds no alpha. Leverage scales return and risk
+    together, so a *constant* leverage leaves Sharpe unchanged; what targeting
+    buys is risk *stability* -- realized vol stays near the target instead of
+    drifting with the market, which steadies drawdowns. It is not free: the
+    position now nudges every day, so turnover (and cost) rises above the
+    on/off crossover.
+    """
+    base = backtest(close, fast, slow, cost=0.0)        # reuse signal & ret
+    realized = base["ret"].rolling(vol_window).std() * np.sqrt(YEAR)
+    lev = (target / realized).shift(1).clip(upper=max_lev).fillna(0.0)
+    position = base["position"] * lev                   # both already lookahead-safe
+    return _equity_frame(close, position, base["ret"], cost)
+
+
 def trade_returns(df):
     """Compounded return of each round-trip trade, including entry/exit costs.
 
@@ -310,6 +334,15 @@ def main():
     ml = ml_backtest(close, cost=0.0005)
     print("ML signal (logistic regression, refit each year on the prior 3):")
     report(ml)
+
+    # volatility targeting: size the same crossover to a 15% annual vol target
+    vt = vol_target(close, fast, slow, target=0.15, cost=0.0005)
+    vtm, rawm = metrics(vt["strat"]), metrics(net["strat"])
+    print("Volatility-targeted 50/200 (15% target) vs the raw crossover:")
+    print(f"  Sharpe {vtm['Sharpe']:.2f} vs {rawm['Sharpe']:.2f}   "
+          f"max drawdown {vtm['Max drawdown']:.1%} vs {rawm['Max drawdown']:.1%}")
+    print("  leverage moves risk, not edge -- Sharpe is roughly unchanged while "
+          "the risk profile steadies.\n")
 
     plot(net, fast, slow, ticker)
 

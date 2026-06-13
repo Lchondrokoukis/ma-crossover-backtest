@@ -167,16 +167,35 @@ Daily direction is barely predictable; the exercise is the harness, not the
 alpha. Any signal, learned or hand-coded, plugs into the same honest
 accounting.
 
+## Volatility targeting
+
+`vol_target(close, fast, slow, target, cost, vol_window, max_lev)` keeps the
+same 0/1 crossover signal but *sizes* it. Each day it estimates annualized
+volatility from the trailing `vol_window` returns and levers the position by
+`target / realized_vol` (capped at `max_lev`): calm markets get geared up
+toward the target, turbulent ones scaled down. Signal and vol estimate are
+both `.shift(1)`-ed, so there is no lookahead; the returned `position` is now
+continuous rather than 0/1.
+
+The lesson is what targeting does *not* do: it adds no alpha. Leverage scales
+return and risk together, so a *constant* leverage leaves Sharpe unchanged —
+`test_engine.py` pins exactly that (`metrics(3 * strat)` Sharpe equals
+`metrics(strat)`). What it buys is risk *stability*: on invested days the
+synthetic asset's ~20% vol is pulled toward the 15% target, so realized risk
+stops drifting with the market and drawdowns steady. It is not free — the
+position nudges every day, so turnover and cost rise above the on/off signal.
+
 ## Extensions
 
-All three original extensions are done, each as its own commit:
-transaction-cost modeling (the `cost` parameter); trade-level statistics
-(`trade_returns()`); parameter sweep with Sharpe heatmap (`sweep()`,
-`heatmap()`); walk-forward validation (`walk_forward()`); multi-asset basket
-(`basket()`); ML-based signal (`ml_backtest()`).
+The three original extensions plus several follow-ups are done, each as its
+own commit: transaction-cost modeling (the `cost` parameter); trade-level
+statistics (`trade_returns()`); parameter sweep with Sharpe heatmap
+(`sweep()`, `heatmap()`); walk-forward validation (`walk_forward()`);
+multi-asset basket (`basket()`); ML-based signal (`ml_backtest()`); and
+volatility targeting (`vol_target()`).
 
-Natural next steps: short selling / long-short positions, volatility-targeted
-position sizing, or a survivorship-bias-free universe.
+Natural next steps: short selling / long-short positions or a
+survivorship-bias-free universe.
 
 ## Files
 
