@@ -46,12 +46,22 @@ def backtest(close, fast, slow, cost=0.0):
 
 
 def metrics(ret):
-    """Total return, CAGR, Sharpe and max drawdown for any return series."""
+    """Total return, CAGR, Sharpe and max drawdown for any return series.
+
+    CAGR annualizes over the number of return periods (len - 1: the first
+    point is the opening mark, not a return). A series with fewer than two
+    points spans no return, so the growth metrics are NaN rather than an
+    explosive ``x ** YEAR``.
+    """
+    if len(ret) < 2:
+        return {"Total return": np.nan, "CAGR": np.nan,
+                "Sharpe": 0.0, "Max drawdown": np.nan}
     equity = (1 + ret).cumprod()
+    sd = ret.std()
     return {
         "Total return": equity.iloc[-1] - 1,
-        "CAGR": equity.iloc[-1] ** (YEAR / len(ret)) - 1,
-        "Sharpe": np.sqrt(YEAR) * ret.mean() / ret.std() if ret.std() else 0.0,
+        "CAGR": equity.iloc[-1] ** (YEAR / (len(ret) - 1)) - 1,
+        "Sharpe": np.sqrt(YEAR) * ret.mean() / sd if sd and np.isfinite(sd) else 0.0,
         "Max drawdown": (equity / equity.cummax() - 1).min(),
     }
 
@@ -74,10 +84,16 @@ def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
     """Rolling train/test: pick the best-Sharpe pair in-sample, trade it out-of-sample.
 
     Returns (oos, folds): stitched out-of-sample returns and a per-fold summary.
-    MAs are warmed on all prior prices so the first test bar is never NaN.
+    MAs are warmed on all prior prices so the first test bar is never NaN
+    (this assumes max(slows) <= train, which holds for the grids used here).
     """
+    if len(close) < train + 2:
+        raise ValueError(f"need at least {train + 2} rows for train={train}, "
+                         f"got {len(close)}")
     oos, rows = [], []
-    for start in range(train, len(close) - 1, test):
+    for start in range(train, len(close), test):
+        if len(close) - start < 2:        # skip a degenerate trailing 1-day fold
+            break
         table = sweep(close.iloc[start - train:start], fasts, slows, cost)
         f, s = table.stack().idxmax()
         # run on all history up to the test end so the MAs are warm on day one
@@ -115,13 +131,20 @@ def ml_backtest(close, cost=0.0, train=3 * YEAR, test=YEAR):
     """
     from sklearn.linear_model import LogisticRegression
 
+    if len(close) <= train:
+        raise ValueError(f"need more than train={train} rows, got {len(close)}")
+
     X = ml_features(close)
     ret = close.pct_change().fillna(0)
     y = (ret.shift(-1) > 0).astype(int)             # label: is tomorrow up?
 
     signal = pd.Series(0.0, index=close.index)
     for start in range(train, len(close), test):
-        fit = X.iloc[start - train:start - 1].dropna().index
+        # train on the prior `train` rows minus the last one: that row's label
+        # is the first test day's return, so dropping it closes the leak
+        fit = X.iloc[start - train:start].dropna().index[:-1]
+        if len(fit) == 0 or y.loc[fit].nunique() < 2:
+            continue                                # degenerate window -> stay flat
         model = LogisticRegression(max_iter=1000).fit(X.loc[fit], y.loc[fit])
         pred = X.iloc[start:start + test].dropna().index
         signal.loc[pred] = model.predict(X.loc[pred])
@@ -159,7 +182,8 @@ def trade_returns(df):
 
     An open position at the end of the sample is marked to market.
     """
-    change = df["position"].diff()
+    prev = df["position"].shift(fill_value=0)           # implicit flat before day 0
+    change = df["position"] - prev                      # so a leading 1 counts as an entry
     tid = (change == 1).cumsum()                        # trade number, set at entry
     mask = ((df["position"] == 1) | (change == -1)) & (tid > 0)
     return (1 + df.loc[mask, "strat"]).groupby(tid[mask]).prod() - 1
