@@ -131,6 +131,33 @@ assert 0.40 < hitn < 0.60, "on noise the hit rate must be near a coin flip"
 print("=> the harness is the exercise, not the alpha: daily direction is")
 print("   close to a coin flip, and the same accounting exposes that honestly.")
 
+# --- robustness: degenerate inputs are handled cleanly, not cryptically ---
+short = close.iloc[:100]
+for bad in (lambda: walk_forward(short, [10, 20], [50, 100], train=504, test=252),
+            lambda: ml_backtest(short, train=756)):
+    try:
+        bad()
+        assert False, "expected ValueError on a series shorter than the train window"
+    except ValueError:
+        pass
+
+# a monotonic series makes every next-day return positive (single-class
+# labels), so ml_backtest must skip those folds rather than crash fit()
+up = pd.Series(100 * np.exp(np.cumsum(np.full(n, 0.001))), index=close.index)
+assert ml_backtest(up, train=756)["position"].isin([0, 1]).all()
+
+# trade_returns must count a position already open on day 0 (boundary case)
+lead = pd.DataFrame({"position": [1, 1, 1, 0, 1, 1],
+                     "strat": [0.10, 0.05, 0.02, 0.0, 0.03, 0.04]})
+lt = trade_returns(lead)
+assert len(lt) == 2                                  # both round trips, incl. the day-0 entry
+assert np.isclose(lt.iloc[0], 1.10 * 1.05 * 1.02 - 1)
+
+# metrics on a flat series has no risk-adjusted return and does not explode
+assert metrics(pd.Series([0.0] * 10))["Sharpe"] == 0.0
+assert np.isfinite(metrics(pd.Series([0.01]))["CAGR"]) or np.isnan(metrics(pd.Series([0.01]))["CAGR"])
+print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat metrics OK.")
+
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward "
       "+ basket + ML signal verified.")
