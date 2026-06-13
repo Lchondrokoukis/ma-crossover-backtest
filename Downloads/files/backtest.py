@@ -25,6 +25,25 @@ def load_prices(ticker, start, end):
     return close.iloc[:, 0] if isinstance(close, pd.DataFrame) else close
 
 
+def _equity_frame(close, position, ret, cost, **extra):
+    """Cost, P&L and equity accounting shared by every strategy frame.
+
+    `position` is the (already lookahead-safe) exposure and `ret` the asset's
+    daily return; `extra` columns are inserted right after `close` so each
+    caller keeps its own column order. Keeping this in one place is the
+    "same accounting everywhere" invariant the whole repo leans on.
+    """
+    # |diff| is the fraction of capital traded on each position change
+    trades = position.diff().abs().fillna(0)
+    strat = position * ret - cost * trades  # subtract cost on every trade
+    return pd.DataFrame({
+        "close": close, **extra,
+        "position": position, "ret": ret, "trades": trades, "strat": strat,
+        "equity": (1 + strat).cumprod(),
+        "equity_bh": (1 + ret).cumprod(),
+    })
+
+
 def backtest(close, fast, slow, cost=0.0):
     """Return DataFrame of signals, returns, and equity curves.
 
@@ -34,15 +53,7 @@ def backtest(close, fast, slow, cost=0.0):
     ma_fast, ma_slow = close.rolling(fast).mean(), close.rolling(slow).mean()
     position = (ma_fast > ma_slow).astype(int).shift(1).fillna(0)
     ret = close.pct_change().fillna(0)
-    # |diff| is the fraction of capital traded on each position change
-    trades = position.diff().abs().fillna(0)
-    strat = position * ret - cost * trades  # subtract cost on every trade
-    return pd.DataFrame({
-        "close": close, "ma_fast": ma_fast, "ma_slow": ma_slow,
-        "position": position, "ret": ret, "trades": trades, "strat": strat,
-        "equity": (1 + strat).cumprod(),
-        "equity_bh": (1 + ret).cumprod(),
-    })
+    return _equity_frame(close, position, ret, cost, ma_fast=ma_fast, ma_slow=ma_slow)
 
 
 def metrics(ret):
@@ -150,13 +161,7 @@ def ml_backtest(close, cost=0.0, train=3 * YEAR, test=YEAR):
         signal.loc[pred] = model.predict(X.loc[pred])
 
     position = signal.shift(1).fillna(0)            # act the day after the signal
-    trades = position.diff().abs().fillna(0)
-    strat = position * ret - cost * trades
-    return pd.DataFrame({
-        "close": close, "position": position, "ret": ret, "trades": trades,
-        "strat": strat, "equity": (1 + strat).cumprod(),
-        "equity_bh": (1 + ret).cumprod(),
-    })
+    return _equity_frame(close, position, ret, cost)
 
 
 def basket(closes, fast, slow, cost=0.0):
@@ -168,9 +173,9 @@ def basket(closes, fast, slow, cost=0.0):
     """
     rows = {}
     for name, close in closes.items():
-        close = close.dropna()
-        m = metrics(backtest(close, fast, slow, cost)["strat"])
-        m["B&H Sharpe"] = metrics(close.pct_change().fillna(0))["Sharpe"]
+        df = backtest(close.dropna(), fast, slow, cost)
+        m = metrics(df["strat"])
+        m["B&H Sharpe"] = metrics(df["ret"])["Sharpe"]   # same ret the frame already holds
         rows[name] = m
     table = pd.DataFrame(rows).T
     table.loc["Average"] = table.mean()
