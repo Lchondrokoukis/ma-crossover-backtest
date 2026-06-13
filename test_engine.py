@@ -17,6 +17,10 @@ df = backtest(close, 50, 200, cost=0.0)
 report(df)
 assert not df["equity"].isna().any()
 assert df["position"].isin([0, 1]).all()
+# the buy-and-hold benchmark and the headline metrics must track the curve
+assert np.isclose(df["equity_bh"].iloc[-1], (1 + df["ret"]).cumprod().iloc[-1])
+assert np.isclose(metrics(df["strat"])["Total return"], df["equity"].iloc[-1] - 1)
+assert metrics(df["strat"])["Max drawdown"] <= 0
 
 # --- lookahead demo: trading on the SAME day's signal (no shift) cheats ---
 ma_fast, ma_slow = close.rolling(50).mean(), close.rolling(200).mean()
@@ -24,6 +28,9 @@ cheat_pos = (ma_fast > ma_slow).astype(int)          # missing the .shift(1)
 cheat = (1 + cheat_pos * close.pct_change().fillna(0)).cumprod().iloc[-1] - 1
 print(f"Correct (with shift):  {df['equity'].iloc[-1] - 1:>7.1%}")
 print(f"Cheating (no shift):   {cheat:>7.1%}")
+# the cardinal rule, pinned: peeking at today's signal must beat the honest,
+# shifted strategy -- this fires if .shift(1) is ever dropped from backtest()
+assert cheat > df["equity"].iloc[-1] - 1, "no-shift lookahead must inflate returns"
 
 # --- transaction-cost checks ---
 COST = 0.0005
@@ -42,6 +49,8 @@ fast_net = backtest(close, 5, 20, cost=COST)
 fn = int(fast_net["trades"].sum())
 fast_drag = (fast_gross["equity"].iloc[-1] - 1) - (fast_net["equity"].iloc[-1] - 1)
 print(f"5/20  (fast):   {fn} trades, drag {fast_drag:.3%}")
+assert fn > n_trades                                     # fast crossover trades far more
+assert fast_drag > drag, "a higher-turnover strategy must feel costs more"
 print("=> low-turnover strategies barely feel costs; high-turnover ones suffer.")
 
 # --- trade-level stats ---
@@ -79,6 +88,11 @@ assert (oos.index == close.index[504:]).all()
 # each fold's choice must be reproducible from its train window alone
 t0 = sweep(close.iloc[:504], [10, 20, 50], [50, 100, 200], cost=COST)
 assert (folds.iloc[0]["fast"], folds.iloc[0]["slow"]) == t0.stack().idxmax()
+# and the stitched OOS slice must equal a direct run of that chosen pair --
+# this catches a mis-slice or a cold-MA-warmup bug the index checks miss
+recon = backtest(close.iloc[:504 + 252], int(folds.iloc[0]["fast"]),
+                 int(folds.iloc[0]["slow"]), cost=COST)["strat"].iloc[504:504 + 252]
+assert np.allclose(recon.values, oos.iloc[:252].values)
 
 best_in_sample = sweep(close, [10, 20, 50], [50, 100, 200], cost=COST).stack().max()
 oos_sharpe = metrics(oos)["Sharpe"]
@@ -95,11 +109,15 @@ noise = {f"A{i}": pd.Series(
 tab = basket(noise, 50, 200, cost=COST)
 direct = metrics(backtest(noise["A0"], 50, 200, cost=COST)["strat"])["Sharpe"]
 assert np.isclose(tab.loc["A0", "Sharpe"], direct)
-assert np.isclose(tab.loc["Average", "Sharpe"], tab["Sharpe"].iloc[:-1].mean())
+# the B&H Sharpe column must equal a direct buy-and-hold run (was a tautology)
+assert np.isclose(tab.loc["A0", "B&H Sharpe"],
+                  metrics(noise["A0"].pct_change().fillna(0))["Sharpe"])
 
 # the lesson: six assets from the SAME driftless process still spread widely,
 # so the best single row always looks like an edge. The average is the test.
 spread = tab["Sharpe"].iloc[:-1].max() - tab["Sharpe"].iloc[:-1].min()
+assert spread > 0.5                                  # driftless rows disperse widely
+assert abs(tab.loc["Average", "Sharpe"]) < spread    # dispersion dwarfs the average
 print(f"\nBasket of driftless noise: per-asset Sharpe spread {spread:.2f}, "
       f"average {tab.loc['Average', 'Sharpe']:+.2f}")
 print(tab.round(2).to_string())
@@ -115,6 +133,7 @@ assert (ml["position"].iloc[:757] == 0).all()
 
 held = ml["position"].iloc[757:]
 hit = (held == (ml["ret"].iloc[757:] > 0)).mean()    # direction hit rate OOS
+assert ml["trades"].sum() > 0                        # a degenerate model would never trade
 print(f"\nML signal on the base series: hit rate {hit:.1%}, "
       f"long {held.mean():.0%} of days, Sharpe "
       f"{metrics(ml['strat'])['Sharpe']:.2f}")
