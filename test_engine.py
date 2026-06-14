@@ -4,7 +4,8 @@ the lookahead-bias demo and the transaction-cost model."""
 import numpy as np
 import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
-                      heatmap, walk_forward, basket, ml_backtest, vol_target)
+                      heatmap, walk_forward, basket, ml_backtest, vol_target,
+                      long_short)
 
 np.random.seed(42)
 n = 1500
@@ -165,6 +166,25 @@ vt_vol = vt.loc[inv, "strat"].std() * np.sqrt(252)   # gross: strat == position*
 assert abs(vt_vol - 0.15) < abs(raw_vol - 0.15)
 print(f"\nVol targeting: invested vol {raw_vol:.0%} raw -> {vt_vol:.0%} targeted (target 15%)")
 
+# --- long-short: go short instead of flat ---
+ls = long_short(close, 50, 200, cost=0.0)
+lf = backtest(close, 50, 200, cost=0.0)
+assert ls["position"].isin([-1, 0, 1]).all()
+# once both MAs are warm, the short book is the long/flat book mapped
+# {0,1} -> {-1,+1}, i.e. ls_position == 2*lf_position - 1 wherever invested
+warm = ls["position"].iloc[200:] != 0
+assert (ls["position"].iloc[200:][warm] == (2 * lf["position"].iloc[200:] - 1)[warm]).all()
+# shorting doubles turnover: a flip closes one side and opens the other
+assert long_short(close, 50, 200, cost=COST)["trades"].sum() > net["trades"].sum()
+# and on an up-drifting series the short legs fight the drift -> it trails B&H
+assert metrics(ls["strat"])["Total return"] < metrics(ls["ret"])["Total return"]
+print(f"\nLong-short (gross): total {metrics(ls['strat'])['Total return']:+.0%}, "
+      f"Sharpe {metrics(ls['strat'])['Sharpe']:.2f}  vs long/flat "
+      f"{metrics(lf['strat'])['Total return']:+.0%} / {metrics(lf['strat'])['Sharpe']:.2f}  "
+      f"(B&H {metrics(ls['ret'])['Total return']:+.0%})")
+print("=> always-in is not free: shorting fights the equity risk premium and "
+      "doubles turnover.")
+
 # --- robustness: degenerate inputs are handled cleanly, not cryptically ---
 short = close.iloc[:100]
 for bad in (lambda: walk_forward(short, [10, 20], [50, 100], train=504, test=252),
@@ -194,4 +214,4 @@ print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat 
 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward "
-      "+ basket + ML signal + vol targeting verified.")
+      "+ basket + ML signal + vol targeting + long-short verified.")
