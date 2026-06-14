@@ -56,6 +56,27 @@ def backtest(close, fast, slow, cost=0.0):
     return _equity_frame(close, position, ret, cost, ma_fast=ma_fast, ma_slow=ma_slow)
 
 
+def long_short(close, fast, slow, cost=0.0):
+    """Crossover that goes SHORT instead of flat: +1 when the fast MA is above
+    the slow one, -1 when below.
+
+    Same lookahead guard (.shift(1)) and accounting as backtest(); the only
+    change is the position takes -1 in a downtrend rather than 0, so the book
+    is always fully invested, long or short.
+
+    The lesson: being always-in is not strictly better. Shorting earns the
+    down-moves the long/flat version sits out, but it also fights the equity
+    risk premium -- on an asset that drifts up, the short legs carry negative
+    expected return and the strategy usually trails buy-and-hold. It also
+    doubles turnover: every crossover now closes one side and opens the other,
+    so |position change| is 2, not 1, and costs bite twice as hard.
+    """
+    ma_fast, ma_slow = close.rolling(fast).mean(), close.rolling(slow).mean()
+    position = np.sign(ma_fast - ma_slow).shift(1).fillna(0)   # +1 long / -1 short
+    ret = close.pct_change().fillna(0)
+    return _equity_frame(close, position, ret, cost, ma_fast=ma_fast, ma_slow=ma_slow)
+
+
 def metrics(ret):
     """Total return, CAGR, Sharpe and max drawdown for any return series.
 
@@ -343,6 +364,14 @@ def main():
           f"max drawdown {vtm['Max drawdown']:.1%} vs {rawm['Max drawdown']:.1%}")
     print("  leverage moves risk, not edge -- Sharpe is roughly unchanged while "
           "the risk profile steadies.\n")
+
+    # long-short: go short in downtrends instead of sitting flat
+    ls = long_short(close, fast, slow, cost=0.0005)
+    lsm = metrics(ls["strat"])
+    print(f"Long-short {fast}/{slow}: total {lsm['Total return']:.1%}, "
+          f"Sharpe {lsm['Sharpe']:.2f} vs long/flat {rawm['Sharpe']:.2f} "
+          f"(B&H {metrics(net['ret'])['Total return']:.1%}) -- shorting an "
+          f"up-drifting market usually trails buy-and-hold and doubles turnover.\n")
 
     plot(net, fast, slow, ticker)
 

@@ -185,17 +185,34 @@ synthetic asset's ~20% vol is pulled toward the 15% target, so realized risk
 stops drifting with the market and drawdowns steady. It is not free — the
 position nudges every day, so turnover and cost rise above the on/off signal.
 
+## Long-short positions
+
+`long_short(close, fast, slow, cost)` keeps the crossover but goes **short**
+(position −1) in a downtrend instead of flat, so the book is always fully
+invested. Same `.shift(1)` guard and the same `_equity_frame` accounting; the
+position is `np.sign(ma_fast - ma_slow)` rather than a 0/1 indicator.
+
+The lesson is that "always in the market" is not automatically better.
+`test_engine.py` pins two facts on the synthetic series: once the MAs are warm
+the short book is exactly the long/flat book mapped {0,1}→{−1,+1}, and its
+turnover is higher because every crossover now closes one side and opens the
+other (|Δposition| = 2, not 1). On an up-drifting asset the short legs fight
+the equity risk premium, so long-short trails buy-and-hold (≈163% vs 304% on
+the test series) at a lower Sharpe — capturing the down-moves rarely pays for
+being short through the drift.
+
 ## Extensions
 
 The three original extensions plus several follow-ups are done, each as its
 own commit: transaction-cost modeling (the `cost` parameter); trade-level
 statistics (`trade_returns()`); parameter sweep with Sharpe heatmap
 (`sweep()`, `heatmap()`); walk-forward validation (`walk_forward()`);
-multi-asset basket (`basket()`); ML-based signal (`ml_backtest()`); and
-volatility targeting (`vol_target()`).
+multi-asset basket (`basket()`); ML-based signal (`ml_backtest()`);
+volatility targeting (`vol_target()`); and long-short positions
+(`long_short()`).
 
-Natural next steps: short selling / long-short positions or a
-survivorship-bias-free universe.
+Natural next steps: a survivorship-bias-free universe, or a portfolio layer
+that combines the basket into one equity curve with risk-based weights.
 
 ## Files
 
