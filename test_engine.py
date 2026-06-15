@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
                       heatmap, walk_forward, basket, ml_backtest, vol_target,
-                      long_short)
+                      long_short, portfolio)
 
 np.random.seed(42)
 n = 1500
@@ -185,6 +185,38 @@ print(f"\nLong-short (gross): total {metrics(ls['strat'])['Total return']:+.0%},
 print("=> always-in is not free: shorting fights the equity risk premium and "
       "doubles turnover.")
 
+# --- portfolio: blend many strategies into one curve (diversification) ---
+pcloses = {f"P{i}": pd.Series(100 * np.exp(np.cumsum(
+    np.random.default_rng(100 + i).normal(
+        0.10 / 252, (0.18 + 0.03 * i) / np.sqrt(252), n))), index=close.index)
+    for i in range(6)}
+comp = [metrics(backtest(c, 50, 200, cost=0.0)["strat"])["Sharpe"] for c in pcloses.values()]
+pe = portfolio(pcloses, 50, 200, cost=0.0, scheme="equal")
+wcols = [c for c in pe.columns if c.startswith("w_")]
+# weights normalize to 1 on active days; no exposure during the warm-up
+active = pe[wcols].sum(axis=1) > 0
+assert np.allclose(pe.loc[active, wcols].sum(axis=1), 1.0)
+assert (pe["strat"][~active] == 0).all()
+# the free lunch: the diversified blend beats the average component Sharpe
+assert metrics(pe["strat"])["Sharpe"] > np.mean(comp)
+# inverse-vol risk-weighting: the calmer strategy (lower trailing vol) gets more
+pv = portfolio(pcloses, 50, 200, cost=0.0, scheme="inverse_vol")
+svol = pd.DataFrame({k: backtest(c, 50, 200, 0.0)["strat"]
+                     for k, c in pcloses.items()}).dropna().rolling(60).std()
+prev, day = pv.index[-2], pv.index[-1]            # weight on `day` uses vol on `prev`
+hi, lo = svol.loc[prev].idxmax(), svol.loc[prev].idxmin()
+assert pv[f"w_{hi}"].loc[day] < pv[f"w_{lo}"].loc[day]
+try:
+    portfolio(pcloses, 50, 200, scheme="bogus")
+    assert False, "unknown weighting scheme must raise"
+except ValueError:
+    pass
+print(f"\nPortfolio of 6 strategies: avg component Sharpe {np.mean(comp):.2f} -> "
+      f"equal-weight {metrics(pe['strat'])['Sharpe']:.2f}, "
+      f"inverse-vol {metrics(pv['strat'])['Sharpe']:.2f}")
+print("=> diversification is the free lunch: the blend's Sharpe tops the "
+      "average component's.")
+
 # --- robustness: degenerate inputs are handled cleanly, not cryptically ---
 short = close.iloc[:100]
 for bad in (lambda: walk_forward(short, [10, 20], [50, 100], train=504, test=252),
@@ -214,4 +246,4 @@ print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat 
 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward "
-      "+ basket + ML signal + vol targeting + long-short verified.")
+      "+ basket + ML signal + vol targeting + long-short + portfolio verified.")
