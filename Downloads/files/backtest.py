@@ -203,6 +203,42 @@ def basket(closes, fast, slow, cost=0.0):
     return table
 
 
+def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60):
+    """Combine per-asset crossover strategies into one portfolio equity curve.
+
+    Each asset is run through backtest() for its daily strategy return; the
+    returns are then blended with daily weights:
+
+    - "equal":       1/N in every asset.
+    - "inverse_vol": weight proportional to 1 / recent volatility, so a calmer
+                     strategy gets more capital (risk-weighting, the seed of
+                     risk parity). The vol is a trailing estimate, shifted one
+                     day, so the weights use only past data -- no lookahead.
+
+    Returns a DataFrame with the blended `strat`, its `equity`, and one
+    `w_<name>` column per asset showing the daily weights.
+
+    The lesson: diversification is the one free lunch in investing. Blending
+    imperfectly correlated strategies keeps the average return but cancels part
+    of the idiosyncratic risk, so the portfolio Sharpe is *higher* than the
+    average of its components. Weighting by inverse volatility (equalizing risk
+    contribution rather than capital) is the standard refinement when the
+    assets' volatilities differ.
+    """
+    strat = pd.DataFrame({name: backtest(c.dropna(), fast, slow, cost)["strat"]
+                          for name, c in closes.items()}).dropna()
+    if scheme == "equal":
+        w = pd.DataFrame(1.0, index=strat.index, columns=strat.columns)
+    elif scheme == "inverse_vol":
+        w = (1.0 / strat.rolling(vol_window).std()).shift(1)  # past data only
+    else:
+        raise ValueError(f"unknown scheme {scheme!r}")
+    w = w.div(w.sum(axis=1), axis=0).fillna(0.0)    # normalize each day to sum 1
+    port = (w * strat).sum(axis=1)
+    return pd.DataFrame({"strat": port, "equity": (1 + port).cumprod(),
+                         **{f"w_{name}": w[name] for name in strat.columns}})
+
+
 def vol_target(close, fast, slow, target=0.15, cost=0.0, vol_window=20, max_lev=3.0):
     """Size the long/flat crossover so realized volatility tracks `target`.
 
@@ -372,6 +408,15 @@ def main():
           f"Sharpe {lsm['Sharpe']:.2f} vs long/flat {rawm['Sharpe']:.2f} "
           f"(B&H {metrics(net['ret'])['Total return']:.1%}) -- shorting an "
           f"up-drifting market usually trails buy-and-hold and doubles turnover.\n")
+
+    # portfolio: blend the same crossover across the basket into one curve
+    port = portfolio(closes, fast, slow, cost=0.0005, scheme="inverse_vol")
+    comp = [metrics(backtest(c.dropna(), fast, slow, 0.0005)["strat"])["Sharpe"]
+            for c in closes.values()]
+    pm = metrics(port["strat"])
+    print(f"Inverse-vol portfolio of {len(closes)} assets: Sharpe {pm['Sharpe']:.2f} "
+          f"vs avg component {np.mean(comp):.2f} -- diversification lifts the "
+          f"risk-adjusted return above any single name on average.\n")
 
     plot(net, fast, slow, ticker)
 

@@ -201,6 +201,24 @@ the equity risk premium, so long-short trails buy-and-hold (≈163% vs 304% on
 the test series) at a lower Sharpe — capturing the down-moves rarely pays for
 being short through the drift.
 
+## Portfolio construction
+
+`portfolio(closes, fast, slow, cost, scheme, vol_window)` is the capstone: it
+runs the crossover on every asset in a basket and blends their daily strategy
+returns into **one** portfolio equity curve. Two weighting schemes: `"equal"`
+(1/N) and `"inverse_vol"` (weight ∝ 1 / trailing volatility, the seed of risk
+parity). The inverse-vol weights are a trailing estimate shifted one day, so
+the allocation uses only past data — the same no-lookahead discipline as
+everywhere else.
+
+The lesson is the one genuinely free lunch in investing: **diversification.**
+`test_engine.py` builds six independent drifting assets and shows the
+equal-weight blend's Sharpe (≈1.0) comfortably beating the average component
+Sharpe (≈0.4) — blending imperfectly correlated strategies keeps the average
+return while cancelling part of the idiosyncratic risk. The inverse-vol scheme
+then equalizes *risk* rather than capital, handing more weight to the calmer
+strategies (a property the tests pin directly).
+
 ## Extensions
 
 The three original extensions plus several follow-ups are done, each as its
@@ -208,11 +226,11 @@ own commit: transaction-cost modeling (the `cost` parameter); trade-level
 statistics (`trade_returns()`); parameter sweep with Sharpe heatmap
 (`sweep()`, `heatmap()`); walk-forward validation (`walk_forward()`);
 multi-asset basket (`basket()`); ML-based signal (`ml_backtest()`);
-volatility targeting (`vol_target()`); and long-short positions
-(`long_short()`).
+volatility targeting (`vol_target()`); long-short positions (`long_short()`);
+and portfolio construction with risk-based weighting (`portfolio()`).
 
-Natural next steps: a survivorship-bias-free universe, or a portfolio layer
-that combines the basket into one equity curve with risk-based weights.
+Natural next steps: a survivorship-bias-free universe, or a deflated Sharpe
+ratio that adjusts the sweep's best cell for the number of trials.
 
 ## Files
 
