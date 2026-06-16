@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
                       heatmap, walk_forward, basket, ml_backtest, vol_target,
-                      long_short, portfolio)
+                      long_short, portfolio, probabilistic_sharpe, deflated_sharpe)
 
 np.random.seed(42)
 n = 1500
@@ -74,6 +74,26 @@ assert np.isnan(table.loc[50, 20])                       # fast >= slow skipped
 direct = metrics(backtest(close, 50, 200, cost=COST)["strat"])["Sharpe"]
 assert np.isclose(table.loc[50, 200], direct)            # cell == direct run
 print(f"\nSweep grid (Sharpe):\n{table.round(2).to_string(na_rep='-')}")
+
+# --- deflated Sharpe: the best cell, corrected for the number of trials ---
+FS, SL = [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250]
+# PSR is a probability and grows with sample length (more data -> more sure)
+pos = pd.Series(np.random.default_rng(1).normal(0.0008, 0.01, 2000))
+assert 0.0 <= probabilistic_sharpe(pos) <= 1.0
+assert probabilistic_sharpe(pos) > probabilistic_sharpe(pos.iloc[:200])
+assert probabilistic_sharpe(pos) > 0.9 and probabilistic_sharpe(-pos) < 0.1
+# drift vs driftless noise: deflation barely dents a real edge but guts a lucky one
+noise_c = pd.Series(100 * np.exp(np.cumsum(
+    np.random.default_rng(7).normal(0, 0.20 / np.sqrt(252), n))), index=close.index)
+_, psr_d, dsr_d = deflated_sharpe(close, sweep(close, FS, SL, COST), COST)
+_, psr_n, dsr_n = deflated_sharpe(noise_c, sweep(noise_c, FS, SL, COST), COST)
+assert dsr_d < psr_d and dsr_n < psr_n               # deflation always reduces
+assert dsr_d > 0.9                                   # the genuine edge survives
+assert dsr_n < dsr_d                                 # noise is deflated far harder
+print(f"Deflated Sharpe of best cell: drift PSR {psr_d:.0%} -> DSR {dsr_d:.0%}; "
+      f"noise PSR {psr_n:.0%} -> DSR {dsr_n:.0%}")
+print("=> on noise the best cell looks plausible (PSR) until the deflated Sharpe,")
+print("   correcting for the many pairs tried, exposes it as luck.")
 
 # --- heatmap renders on a denser grid ---
 dense = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
@@ -245,5 +265,5 @@ assert np.isfinite(metrics(pd.Series([0.01]))["CAGR"]) or np.isnan(metrics(pd.Se
 print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat metrics OK.")
 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
-print("\nOK: engine + costs + trade stats + sweep + heatmap + walk-forward "
-      "+ basket + ML signal + vol targeting + long-short + portfolio verified.")
+print("\nOK: engine + costs + trade stats + sweep + heatmap + deflated-Sharpe "
+      "+ walk-forward + basket + ML signal + vol targeting + long-short + portfolio verified.")

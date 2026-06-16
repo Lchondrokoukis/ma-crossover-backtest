@@ -131,6 +131,23 @@ Second, the out-of-sample Sharpe is the honest number to quote;
 the in-sample best flattering the out-of-sample result even where there is no
 structure at all.
 
+## Deflated Sharpe ratio
+
+`probabilistic_sharpe(ret, sr_star)` and `deflated_sharpe(close, table, cost)`
+put a number on the sweep's central warning. The **Probabilistic Sharpe Ratio**
+(Bailey & López de Prado) corrects an observed Sharpe for sample length, skew
+and kurtosis and returns the probability the *true* Sharpe beats a benchmark.
+The **Deflated Sharpe Ratio** sets that benchmark to the Sharpe you would
+*expect* as the maximum of N independent trials — so it asks whether the best
+cell of an N-pair sweep is still significant once you admit you went looking.
+
+`test_engine.py` makes the point unmissable: on the drifting series the best
+cell deflates only from ≈100% to ≈100% (a real edge survives), but on a
+*driftless random walk* the best cell looks plausible naively (PSR ≈ 71%) and
+collapses to DSR ≈ 31% once corrected for the ~20 pairs tried. That gap is the
+quantified cost of in-sample optimisation — the same lesson the heatmap shows
+visually, now as a probability.
+
 ## Multi-asset basket
 
 `basket(closes, fast, slow, cost)` runs one fixed pair across a mapping of
@@ -227,10 +244,11 @@ statistics (`trade_returns()`); parameter sweep with Sharpe heatmap
 (`sweep()`, `heatmap()`); walk-forward validation (`walk_forward()`);
 multi-asset basket (`basket()`); ML-based signal (`ml_backtest()`);
 volatility targeting (`vol_target()`); long-short positions (`long_short()`);
-and portfolio construction with risk-based weighting (`portfolio()`).
+portfolio construction with risk-based weighting (`portfolio()`); and the
+deflated Sharpe ratio (`deflated_sharpe()`, `probabilistic_sharpe()`).
 
-Natural next steps: a survivorship-bias-free universe, or a deflated Sharpe
-ratio that adjusts the sweep's best cell for the number of trials.
+Natural next step: a survivorship-bias-free universe (delisted tickers
+included), to retire the last bias listed under Limitations.
 
 ## Files
 
