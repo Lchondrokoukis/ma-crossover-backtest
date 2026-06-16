@@ -112,6 +112,52 @@ def sweep(close, fasts, slows, cost=0.0):
     return table
 
 
+def probabilistic_sharpe(ret, sr_star=0.0):
+    """Probability that the TRUE (per-period) Sharpe exceeds `sr_star`.
+
+    An observed Sharpe is a noisy estimate; with few observations, skew or fat
+    tails it can look good by chance. The Probabilistic Sharpe Ratio (Bailey &
+    Lopez de Prado) corrects for sample length, skewness and kurtosis and
+    returns a probability. `sr_star` is a per-period benchmark Sharpe -- 0 asks
+    simply "is the Sharpe positive at all?".
+    """
+    from scipy.stats import norm
+    r = ret.dropna()
+    sr = r.mean() / r.std()                       # per-period Sharpe (ddof=1)
+    skew, kurt = r.skew(), r.kurt() + 3           # pandas kurt is excess -> Pearson
+    denom = np.sqrt(1 - skew * sr + (kurt - 1) / 4 * sr ** 2)
+    return float(norm.cdf((sr - sr_star) * np.sqrt(len(r) - 1) / denom))
+
+
+def _expected_max_sharpe(sharpes):
+    """Per-period Sharpe one would EXPECT as the best of N independent trials
+    whose Sharpes have this cross-sectional spread -- the multiple-testing
+    benchmark (more trials -> a higher luckiest Sharpe even with no real edge)."""
+    from scipy.stats import norm
+    s = pd.Series(sharpes).dropna()
+    N, g = len(s), 0.5772156649                   # Euler-Mascheroni constant
+    return s.std() * ((1 - g) * norm.ppf(1 - 1.0 / N)
+                      + g * norm.ppf(1 - 1.0 / (N * np.e)))
+
+
+def deflated_sharpe(close, table, cost=0.0):
+    """Deflate the sweep's best cell for the number of (fast, slow) trials.
+
+    The single best cell of a sweep looks impressive partly because we tried
+    many pairs -- the more configurations searched, the higher the luckiest
+    Sharpe climbs even with no real edge. The Deflated Sharpe Ratio is the PSR
+    of the best strategy measured not against zero but against the Sharpe you
+    would EXPECT as the maximum of that many trials. Returns
+    (best_pair, psr_vs_zero, dsr): the gap between the naive significance and
+    the deflated one is the price of searching the grid.
+    """
+    per_period = table.stack().dropna() / np.sqrt(YEAR)   # annualized -> per-period
+    f, s = table.stack().idxmax()
+    best = backtest(close, int(f), int(s), cost)["strat"]
+    return (f, s), probabilistic_sharpe(best, 0.0), \
+        probabilistic_sharpe(best, _expected_max_sharpe(per_period))
+
+
 def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
     """Rolling train/test: pick the best-Sharpe pair in-sample, trade it out-of-sample.
 
@@ -364,7 +410,10 @@ def main():
     print(table.round(2).to_string(na_rep="-"))
     bf, bs = table.stack().idxmax()
     print(f"Best in-sample: MA({bf}/{bs}), Sharpe {table.loc[bf, bs]:.2f} -- "
-          f"partly luck until proven out-of-sample.\n")
+          f"partly luck until proven out-of-sample.")
+    _, psr0, dsr = deflated_sharpe(close, table, cost=0.0005)
+    print(f"Deflated for {table.stack().size} trials: naive P(Sharpe>0) = {psr0:.0%}, "
+          f"deflated = {dsr:.0%} -- the gap is the cost of picking the best cell.\n")
     heatmap(table)
 
     oos, folds = walk_forward(close, [5, 10, 20, 30, 50, 80],
