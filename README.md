@@ -231,7 +231,10 @@ one day, so the allocation uses only past data — the same no-lookahead
 discipline as everywhere else. The volatility is the *asset's*, not the
 strategy's: a crossover sleeve that sits flat has zero realized volatility,
 and an earlier version that weighted by 1/0 left the whole book in cash on
-half the days of the test.
+half the days of the test. The estimate is taken on each asset's own trading
+days and floored at half the day's median across names, so a missed print or
+a stale price can neither zero a weight nor hand the book to one name (a test
+freezes one price for 100 days: its weight stays near 0.3 instead of 0.8).
 
 The lesson is the one genuinely free lunch in investing: **diversification.**
 `test_engine.py` builds six independent drifting assets and shows the
@@ -252,21 +255,25 @@ which to skip. Survivorship bias is lookahead in the *universe* rather than in
 the signal.
 
 `survivors(closes)` builds that biased universe on purpose (the names still
-trading on the last date), and `survivorship_bias(closes, fast, slow, cost)`
-runs the same portfolio on it and on the **point-in-time** universe (every
-name that existed at the time, dead ones included), with a Bias row between
-them. `portfolio()` is point-in-time now: each day's weights cover only the
-names with a price that day, so a delisting name is held through its last
-close, final loss included, and its capital moves to the survivors the next
-day. Before, one delisting truncated the whole book — at day 228 of 1500 in
-the test. `basket()` needed no change, since it already runs each name on its
+trading on the last date; `grace` widens that window for names on different
+calendars), and `survivorship_bias(closes, fast, slow, cost)` runs the same
+portfolio on it and on the **point-in-time** universe (every name that existed
+at the time, dead ones included), with a Bias row between them. `portfolio()`
+is point-in-time now: a name joins the book on its first print and leaves after
+its last, so a delisting name is held through its last close, final loss
+included, and its capital moves to the survivors the next day. A missing day in
+between is a halt: the name keeps its capital at zero return until it trades
+again, instead of lending it to the others and then also collecting the whole
+gap move. Before, one delisting truncated the whole book — at day 228 of 1500
+in the test. `basket()` needed no change, since it already runs each name on its
 own dates, but its Average row is only as honest as its rows: on the survivors
 it lifts the average buy-and-hold Sharpe from −0.23 to +0.27.
 
 `test_engine.py` simulates 30 zero-edge stocks (expected return exactly 0)
 that delist at a 30% haircut once they close below 30; 11 die. Point-in-time,
-an equal-weight buy-and-hold returns −5%; the 19 survivors alone show +80% at
-a Sharpe of 1.24 — profit made purely by who was left out. About 14 points of
+an always-long equal-weight book (1/N of the listed names, rebalanced daily —
+the `EW` columns) returns −5%; the 19 survivors alone show +80% at a Sharpe of
+1.24 — profit made purely by who was left out. About 14 points of
 that gap are the delisting returns alone: a database that keeps the dead
 tickers but drops their final loss still reports +8%. The crossover dodges
 part of the bias (it was flat on every delisting day), yet its Sharpe still

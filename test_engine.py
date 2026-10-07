@@ -232,6 +232,36 @@ assert np.allclose(budget, budget[0])
 # and the book never sits all in cash after the warm-up: weighting by the
 # STRATEGY's vol did exactly that whenever a sleeve was flat (1/0 -> inf/inf)
 assert np.allclose(pv[wcols].iloc[61:].sum(axis=1), 1.0)
+
+# trading gaps: each name skips different days (local holidays). A halted name
+# keeps its capital and earns nothing until it trades again, so under both
+# schemes the book stays fully invested and every listed name keeps a weight
+holes = {k: c.drop(close.index[300 + 7 * i::40]) for i, (k, c) in enumerate(pcloses.items())}
+for scheme in ("equal", "inverse_vol"):
+    wh = portfolio(holes, 50, 200, scheme=scheme).filter(like="w_")
+    assert np.allclose(wh.iloc[61:].sum(axis=1), 1.0) and (wh.iloc[61:] > 0).all().all()
+# ...and a halt is never counted twice: with one name halted for a week, the
+# equal-weight book is exactly the 1/N average of the sleeves, the halted one
+# earning 0 meanwhile and its whole gap move on the day it reopens
+gap = dict(pcloses, P2=pcloses["P2"].drop(close.index[800:805]))
+sleeves = pd.DataFrame({k: backtest(c, 50, 200)["strat"] for k, c in gap.items()})
+assert np.allclose(portfolio(gap, 50, 200, scheme="equal")["strat"],
+                   sleeves.fillna(0.0).mean(axis=1))
+# a halt that ends in a -90% delisting print still weighs that final loss
+dying = pcloses["P3"].copy()
+dying.iloc[1000:1003] = np.nan
+dying.iloc[1003] = dying.iloc[999] * 0.1
+dying.iloc[1004:] = np.nan
+for scheme in ("equal", "inverse_vol"):
+    pdie = portfolio(dict(pcloses, P3=dying), 50, 200, scheme=scheme)
+    assert pdie.loc[close.index[1003], "w_P3"] > 0
+# a stale price (100 identical closes, zero realized vol) neither sends the
+# inverse-vol book to cash nor hands it to the stale name
+stale = dict(pcloses, P0=pcloses["P0"].copy())
+stale["P0"].iloc[700:800] = stale["P0"].iloc[700]
+ws = portfolio(stale, 50, 200, scheme="inverse_vol").filter(like="w_")
+assert np.allclose(ws.iloc[61:].sum(axis=1), 1.0) and ws["w_P0"].max() < 0.4
+
 try:
     portfolio(pcloses, 50, 200, scheme="bogus")
     assert False, "unknown weighting scheme must raise"
@@ -269,6 +299,19 @@ dead = [k for k in uni if k not in surv]
 # survivors() keeps exactly the names still listed on the final date
 assert dead and all(last[k] == close.index[-1] for k in surv)
 assert all(last[k] < close.index[-1] for k in dead)
+# a live name that only skipped the final day (a local holiday) is dead by the
+# default exact rule but survives with grace=1; a name with no prices is ignored
+alive = dict(surv)
+k0 = next(iter(alive))
+alive[k0] = alive[k0].iloc[:-1]
+assert k0 not in survivors(alive) and k0 in survivors(alive, grace=1)
+assert set(survivors(dict(uni, Z=pd.Series(np.nan, index=close.index)))) == set(surv)
+for bad in ({}, {"X": pd.Series(dtype=float)}):
+    try:
+        survivors(bad)
+        assert False, "survivors() needs at least one name with a price"
+    except ValueError:
+        pass
 
 # point-in-time portfolio: a delisting no longer truncates the curve, the book
 # stays fully invested, and a dead name is held through its delisting day (its
@@ -295,25 +338,25 @@ assert not np.allclose(portfolio(survivors(cut), 50, 200, cost=COST, scheme="equ
 # the lesson: dropping the dead inflates the backtest -- even basket()'s
 # "judge the Average row" is fooled when the rows were chosen by survival
 sb = survivorship_bias(uni, 50, 200, cost=COST)
-assert sb.loc["Bias", "B&H return"] > 0 and sb.loc["Bias", "B&H Sharpe"] > 0
-# its B&H row is a direct run: an equal-weight hold of the names listed each day
+assert sb.loc["Bias", "EW return"] > 0 and sb.loc["Bias", "EW Sharpe"] > 0
+# its EW row is a direct run: an equal-weight book of the names listed each day
 panel = pd.DataFrame(uni)
-assert np.isclose(sb.loc["Point-in-time", "B&H return"],
+assert np.isclose(sb.loc["Point-in-time", "EW return"],
                   metrics((panel / panel.shift() - 1).mean(axis=1).fillna(0.0))["Total return"])
 assert (basket(surv, 50, 200, COST).loc["Average", "B&H Sharpe"]
         > basket(uni, 50, 200, COST).loc["Average", "B&H Sharpe"])
 # the crossover is usually flat before a name dies, so it dodges part of the bias
 held_dead = np.mean([backtest(uni[k].dropna(), 50, 200)["position"].iloc[-1] for k in dead])
-assert held_dead < 0.5 and sb.loc["Bias", "Strategy Sharpe"] < sb.loc["Bias", "B&H Sharpe"]
+assert held_dead < 0.5 and sb.loc["Bias", "Strategy Sharpe"] < sb.loc["Bias", "EW Sharpe"]
 # keeping the dead but dropping their delisting return is a second, quieter bias
 nohc = survivorship_bias(dying_universe(0, haircut=0.0), 50, 200, cost=COST)
-assert nohc.loc["Point-in-time", "B&H return"] > sb.loc["Point-in-time", "B&H return"]
+assert nohc.loc["Point-in-time", "EW return"] > sb.loc["Point-in-time", "EW return"]
 print(f"\nSurvivorship: {len(dead)} of {len(uni)} zero-edge names delisted; the "
       f"crossover held {held_dead:.0%} of them on their delisting day")
 print(sb.round(2).to_string())
-print(f"=> survivors alone turn a {sb.loc['Point-in-time', 'B&H return']:+.0%} "
-      f"buy-and-hold into {sb.loc['Survivors only', 'B&H return']:+.0%}; keeping the dead "
-      f"but not their delisting returns still shows {nohc.loc['Point-in-time', 'B&H return']:+.0%}.")
+print(f"=> survivors alone turn a {sb.loc['Point-in-time', 'EW return']:+.0%} "
+      f"always-long equal-weight book into {sb.loc['Survivors only', 'EW return']:+.0%}; keeping the dead "
+      f"but not their delisting returns still shows {nohc.loc['Point-in-time', 'EW return']:+.0%}.")
 
 # --- robustness: degenerate inputs are handled cleanly, not cryptically ---
 short = close.iloc[:100]

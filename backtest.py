@@ -249,6 +249,13 @@ def basket(closes, fast, slow, cost=0.0):
     return table
 
 
+def _listed(frame):
+    """True from each column's first to its last valid value -- listed, halts
+    included -- and False before a listing or after a delisting."""
+    seen = frame.notna()
+    return seen.cummax() & seen[::-1].cummax()[::-1]
+
+
 def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60):
     """Combine per-asset crossover strategies into one portfolio equity curve.
 
@@ -258,20 +265,30 @@ def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60)
     - "equal":       1/N in every asset.
     - "inverse_vol": weight proportional to 1 / the asset's recent volatility,
                      so a calmer asset gets more capital (risk-weighting, the
-                     seed of risk parity). The vol is a trailing estimate,
-                     shifted one day, so the weights use only past data -- no
-                     lookahead. It is the asset's vol, not the strategy's: a
-                     sleeve that sat flat for `vol_window` days has zero
-                     realized vol, and 1/0 would send the whole book to cash.
+                     seed of risk parity). The vol is a trailing estimate on
+                     the asset's own trading days, lagged one print, so the
+                     weights use only past data -- no lookahead. It is the
+                     asset's vol, not the strategy's: a sleeve that sat flat
+                     for `vol_window` days has zero realized vol, and 1/0 would
+                     send the whole book to cash. A stale price can still push
+                     an asset's vol toward 0, so the estimate is floored at
+                     half the day's median across names -- no single name can
+                     take over the book.
 
     Returns a DataFrame with the blended `strat`, its `equity`, and one
     `w_<name>` column per asset showing the daily weights.
 
-    The universe is point-in-time: assets need not share a calendar (NaN
-    before a listing or after a delisting), and each day's weights cover only
-    the names with a price that day. A delisting name is held through its last
-    close -- its final loss included -- and its capital moves to the names
-    still trading the next day, instead of one death truncating the curve.
+    The universe is point-in-time: assets need not share a calendar. A name
+    joins the book on its first print and leaves after its last one (a
+    delisting, final loss included). In between, a day without a print is a
+    halt: the name keeps its capital and earns nothing until it trades again,
+    when its return covers the whole gap -- its capital is never lent to the
+    other names meanwhile, so nothing is counted twice. Telling a halt from a
+    delisting needs to know whether trading resumes: exchanges announce both,
+    but a price series only shows the gap, so this is read from the sample
+    (at its very edge a halted name looks delisted). It uses listing status,
+    never a future return, and parking a halted name's capital at zero is the
+    conservative choice.
 
     The lesson: diversification is the one free lunch in investing. Blending
     imperfectly correlated strategies keeps the average return but cancels part
@@ -282,23 +299,26 @@ def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60)
     """
     strat = pd.DataFrame({name: backtest(c.dropna(), fast, slow, cost)["strat"]
                           for name, c in closes.items()})       # union of dates
+    listed = _listed(strat)
+    strat = strat.fillna(0.0).where(listed)         # a halt earns 0, keeps its weight
     if scheme == "equal":
         w = pd.DataFrame(1.0, index=strat.index, columns=strat.columns)
     elif scheme == "inverse_vol":
-        ret = pd.DataFrame({name: c.dropna().pct_change() for name, c in closes.items()})
-        sd = ret.rolling(vol_window).std()
-        w = (1.0 / sd.where(sd > 0)).shift(1)         # asset risk, past data only
+        sd = pd.DataFrame({name: c.dropna().pct_change().rolling(vol_window).std().shift(1)
+                           for name, c in closes.items()}).reindex(strat.index).ffill()
+        sd = sd.clip(lower=sd.median(axis=1) / 2, axis=0)   # a stale price can't take the book
+        w = 1.0 / sd.where(sd > 0)                  # asset risk, past prints only
     else:
         raise ValueError(f"unknown scheme {scheme!r}")
-    w = w.where(strat.notna())                      # point-in-time: listed names only
+    w = w.where(listed)                             # point-in-time: listed names only
     w = w.div(w.sum(axis=1), axis=0).fillna(0.0)    # normalize each day to sum 1
     port = (w * strat).sum(axis=1)
     return pd.DataFrame({"strat": port, "equity": (1 + port).cumprod(),
                          **{f"w_{name}": w[name] for name in strat.columns}})
 
 
-def survivors(closes):
-    """Keep only the names still trading on the universe's last date.
+def survivors(closes, grace=0):
+    """Keep only the names still trading at the end of the sample.
 
     This is the universe you get by downloading today's tickers -- and it is
     biased, kept here so the bias can be measured. Survival is an outcome
@@ -307,30 +327,44 @@ def survivors(closes):
     losses with them, and every average looks better than anything an investor
     could actually have held. The honest test passes every name that existed
     at the time, dead ones included, to basket() / portfolio().
+
+    A name survives if it printed on one of the last `grace` + 1 dates of the
+    universe; the default 0 means the final date itself. Raise `grace` when
+    names trade on different calendars, so one that merely skipped the last
+    day (a local holiday) is not mistaken for a delisting -- at the price of
+    counting a death inside that window as survival.
     """
-    end = max(c.last_valid_index() for c in closes.values())
-    return {name: c for name, c in closes.items() if c.last_valid_index() == end}
+    last = {name: c.last_valid_index() for name, c in closes.items()}
+    dates = sorted({d for c in closes.values() for d in c.dropna().index})
+    if not dates:
+        raise ValueError("survivors() needs at least one name with a price")
+    cutoff = dates[max(len(dates) - 1 - grace, 0)]
+    return {name: c for name, c in closes.items()
+            if last[name] is not None and last[name] >= cutoff}
 
 
-def survivorship_bias(closes, fast, slow, cost=0.0, scheme="equal"):
+def survivorship_bias(closes, fast, slow, cost=0.0, scheme="equal", grace=0):
     """The same portfolio on the point-in-time universe and on its survivors.
 
     Returns rows "Point-in-time" (every name, dead ones included), "Survivors
-    only" and "Bias" (survivors minus point-in-time), with the crossover
-    portfolio's and an equal-weight buy-and-hold's total return and Sharpe.
+    only" and "Bias" (survivors minus point-in-time), with the total return
+    and Sharpe of the crossover portfolio and of "EW", an always-long
+    equal-weight book (1/N of the listed names, rebalanced daily -- the
+    strategy portfolio's own construction without the signal).
 
     The lesson: survivorship bias is lookahead by another name -- choosing the
-    sample by who exists today lets the outcome pick the test. Buy-and-hold
-    eats the whole bias; the crossover is usually already flat when a name
+    sample by who exists today lets the outcome pick the test. The always-long
+    book eats the whole bias; the crossover is usually already flat when a name
     dies, so it dodges part of it, but not the selection itself.
     """
     rows = {}
-    for label, u in (("Point-in-time", closes), ("Survivors only", survivors(closes))):
+    for label, u in (("Point-in-time", closes), ("Survivors only", survivors(closes, grace))):
         s = metrics(portfolio(u, fast, slow, cost, scheme)["strat"])
         rets = pd.DataFrame({k: c.dropna().pct_change() for k, c in u.items()})
-        b = metrics(rets.mean(axis=1).fillna(0.0))     # equal weight over listed names
+        rets = rets.fillna(0.0).where(_listed(pd.DataFrame(u)))   # halts earn 0
+        e = metrics(rets.mean(axis=1).fillna(0.0))
         rows[label] = {"Strategy return": s["Total return"], "Strategy Sharpe": s["Sharpe"],
-                       "B&H return": b["Total return"], "B&H Sharpe": b["Sharpe"]}
+                       "EW return": e["Total return"], "EW Sharpe": e["Sharpe"]}
     table = pd.DataFrame(rows).T
     table.loc["Bias"] = table.loc["Survivors only"] - table.loc["Point-in-time"]
     return table
@@ -522,7 +556,7 @@ def main():
     # survivors-only by construction -- the bias is invisible here, not absent
     sb = survivorship_bias(closes, fast, slow, cost=0.0005)
     print(f"Survivorship: {len(survivors(closes))} of {len(closes)} tickers trade to "
-          f"the end, so the measured B&H bias reads {sb.loc['Bias', 'B&H return']:+.1%} "
+          f"the end, so the measured always-long bias reads {sb.loc['Bias', 'EW return']:+.1%} "
           f"-- invisible, not absent: free data has no delisted names, so every "
           f"real-data number above is survivors-only. test_engine.py sizes the bias.\n")
 
