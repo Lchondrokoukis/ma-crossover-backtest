@@ -225,10 +225,13 @@ being short through the drift.
 `portfolio(closes, fast, slow, cost, scheme, vol_window)` is the capstone: it
 runs the crossover on every asset in a basket and blends their daily strategy
 returns into **one** portfolio equity curve. Two weighting schemes: `"equal"`
-(1/N) and `"inverse_vol"` (weight ∝ 1 / trailing volatility, the seed of risk
-parity). The inverse-vol weights are a trailing estimate shifted one day, so
-the allocation uses only past data — the same no-lookahead discipline as
-everywhere else.
+(1/N) and `"inverse_vol"` (weight ∝ 1 / the asset's trailing volatility, the
+seed of risk parity). The inverse-vol weights are a trailing estimate shifted
+one day, so the allocation uses only past data — the same no-lookahead
+discipline as everywhere else. The volatility is the *asset's*, not the
+strategy's: a crossover sleeve that sits flat has zero realized volatility,
+and an earlier version that weighted by 1/0 left the whole book in cash on
+half the days of the test.
 
 The lesson is the one genuinely free lunch in investing: **diversification.**
 `test_engine.py` builds six independent drifting assets and shows the
@@ -236,7 +239,8 @@ equal-weight blend's Sharpe (≈1.0) comfortably beating the average component
 Sharpe (≈0.4) — blending imperfectly correlated strategies keeps the average
 return while cancelling part of the idiosyncratic risk. The inverse-vol scheme
 then equalizes *risk* rather than capital, handing more weight to the calmer
-strategies (a property the tests pin directly).
+assets so that weight × volatility is the same for every name (a property the
+tests pin directly).
 
 ## Survivorship bias
 

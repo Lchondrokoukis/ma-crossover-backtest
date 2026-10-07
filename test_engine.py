@@ -220,13 +220,18 @@ assert np.allclose(pe.loc[active, wcols].sum(axis=1), 1.0)
 assert (pe["strat"][~active] == 0).all()
 # the free lunch: the diversified blend beats the average component Sharpe
 assert metrics(pe["strat"])["Sharpe"] > np.mean(comp)
-# inverse-vol risk-weighting: the calmer strategy (lower trailing vol) gets more
+# inverse-vol risk-weighting: the calmer ASSET (lower trailing vol) gets more
+# capital and every name carries the same risk budget (weight x vol is equal)
 pv = portfolio(pcloses, 50, 200, cost=0.0, scheme="inverse_vol")
-svol = pd.DataFrame({k: backtest(c, 50, 200, 0.0)["strat"]
-                     for k, c in pcloses.items()}).dropna().rolling(60).std()
+avol = pd.DataFrame({k: c.pct_change() for k, c in pcloses.items()}).rolling(60).std()
 prev, day = pv.index[-2], pv.index[-1]            # weight on `day` uses vol on `prev`
-hi, lo = svol.loc[prev].idxmax(), svol.loc[prev].idxmin()
+hi, lo = avol.loc[prev].idxmax(), avol.loc[prev].idxmin()
 assert pv[f"w_{hi}"].loc[day] < pv[f"w_{lo}"].loc[day]
+budget = pv.loc[day, wcols].to_numpy(float) * avol.loc[prev].to_numpy(float)
+assert np.allclose(budget, budget[0])
+# and the book never sits all in cash after the warm-up: weighting by the
+# STRATEGY's vol did exactly that whenever a sleeve was flat (1/0 -> inf/inf)
+assert np.allclose(pv[wcols].iloc[61:].sum(axis=1), 1.0)
 try:
     portfolio(pcloses, 50, 200, scheme="bogus")
     assert False, "unknown weighting scheme must raise"

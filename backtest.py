@@ -256,10 +256,13 @@ def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60)
     returns are then blended with daily weights:
 
     - "equal":       1/N in every asset.
-    - "inverse_vol": weight proportional to 1 / recent volatility, so a calmer
-                     strategy gets more capital (risk-weighting, the seed of
-                     risk parity). The vol is a trailing estimate, shifted one
-                     day, so the weights use only past data -- no lookahead.
+    - "inverse_vol": weight proportional to 1 / the asset's recent volatility,
+                     so a calmer asset gets more capital (risk-weighting, the
+                     seed of risk parity). The vol is a trailing estimate,
+                     shifted one day, so the weights use only past data -- no
+                     lookahead. It is the asset's vol, not the strategy's: a
+                     sleeve that sat flat for `vol_window` days has zero
+                     realized vol, and 1/0 would send the whole book to cash.
 
     Returns a DataFrame with the blended `strat`, its `equity`, and one
     `w_<name>` column per asset showing the daily weights.
@@ -282,7 +285,9 @@ def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60)
     if scheme == "equal":
         w = pd.DataFrame(1.0, index=strat.index, columns=strat.columns)
     elif scheme == "inverse_vol":
-        w = (1.0 / strat.rolling(vol_window).std()).shift(1)  # past data only
+        ret = pd.DataFrame({name: c.dropna().pct_change() for name, c in closes.items()})
+        sd = ret.rolling(vol_window).std()
+        w = (1.0 / sd.where(sd > 0)).shift(1)         # asset risk, past data only
     else:
         raise ValueError(f"unknown scheme {scheme!r}")
     w = w.where(strat.notna())                      # point-in-time: listed names only
