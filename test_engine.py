@@ -6,7 +6,7 @@ import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
                       heatmap, walk_forward, basket, ml_backtest, vol_target,
                       long_short, portfolio, probabilistic_sharpe, deflated_sharpe,
-                      survivors, survivorship_bias)
+                      survivors, survivorship_bias, alpha_beta)
 
 np.random.seed(42)
 n = 1500
@@ -95,6 +95,59 @@ print(f"Deflated Sharpe of best cell: drift PSR {psr_d:.0%} -> DSR {dsr_d:.0%}; 
       f"noise PSR {psr_n:.0%} -> DSR {dsr_n:.0%}")
 print("=> on noise the best cell looks plausible (PSR) until the deflated Sharpe,")
 print("   correcting for the many pairs tried, exposes it as luck.")
+
+# --- alpha vs beta: is the return skill, or just market exposure? ---
+# leverage is beta, not alpha: any fixed fraction of the benchmark has that
+# fraction as its beta, zero alpha and an R2 of 1
+fixed = alpha_beta(0.6 * net["ret"], net["ret"])
+assert np.isclose(fixed["Beta"], 0.6) and abs(fixed["Alpha"]) < 1e-12
+assert np.isclose(fixed["R2"], 1.0) and fixed["Alpha t-stat"] == 0.0
+# a riskless extra 1bp a day on top of it is pure alpha: 2.52%/yr, beyond doubt
+sure = alpha_beta(0.6 * net["ret"] + 0.0001, net["ret"])
+assert np.isclose(sure["Alpha"], 0.0001 * 252) and sure["Alpha t-stat"] == np.inf
+# the crossover here matches buy-and-hold's Sharpe, yet its beta is about its
+# share of days invested and its alpha is not significant: less risk, same edge
+abx = alpha_beta(net["strat"], net["ret"])
+assert abs(abx["Beta"] - net["position"].mean()) < 0.05
+assert abs(abx["Alpha t-stat"]) < 2
+# cross-check against textbook matrix OLS: coef = lstsq([1, bench], strat),
+# t = intercept / sqrt(sigma^2 (X'X)^-1 [0, 0])
+X = np.column_stack([np.ones(len(net)), net["ret"]])
+coef = np.linalg.lstsq(X, net["strat"], rcond=None)[0]
+res = net["strat"].to_numpy() - X @ coef
+cov = res @ res / (len(net) - 2) * np.linalg.inv(X.T @ X)
+assert np.isclose(abx["Beta"], coef[1]) and np.isclose(abx["Alpha"], coef[0] * 252)
+assert np.isclose(abx["Alpha t-stat"], coef[0] / np.sqrt(cov[0, 0]))
+
+# alpha needs structure to find: 40 random walks (none) against 40 markets with
+# persistent bull/bear regimes. Timing earns alpha only in the second -- and
+# even there one 6-year sample clears t > 2 in under half of the runs
+def regime_walk(seed, p_stay=0.997, bull=0.25, bear=-0.35, vol=0.15):
+    rng = np.random.default_rng(seed)
+    state = np.cumsum(rng.random(n) > p_stay) % 2     # flips between 0=bull, 1=bear
+    r = rng.normal(np.where(state == 0, bull, bear) / 252, vol / np.sqrt(252))
+    return pd.Series(100 * np.exp(np.cumsum(r)), index=close.index)
+
+def iid_walk(seed):
+    r = np.random.default_rng(seed).normal(0.08 / 252, 0.20 / np.sqrt(252), n)
+    return pd.Series(100 * np.exp(np.cumsum(r)), index=close.index)
+
+def alpha_t(c):
+    d = backtest(c, 50, 200, cost=COST)
+    return alpha_beta(d["strat"], d["ret"])["Alpha t-stat"]
+
+t_iid = np.array([alpha_t(iid_walk(s)) for s in range(40)])
+t_reg = np.array([alpha_t(regime_walk(s)) for s in range(40)])
+assert abs(t_iid.mean()) < 1                        # no structure: alpha centred on 0
+assert t_reg.mean() > 0.8 and t_reg.mean() - t_iid.mean() > 0.8   # structure: alpha
+assert np.mean(t_reg > 2) < 0.5                     # ...that one sample rarely proves
+print(f"\nAlpha vs beta: crossover Sharpe {metrics(net['strat'])['Sharpe']:.2f} vs B&H "
+      f"{metrics(net['ret'])['Sharpe']:.2f}, but beta {abx['Beta']:.2f} "
+      f"({net['position'].mean():.0%} of days invested), alpha t = {abx['Alpha t-stat']:.2f}")
+print(f"Mean alpha t over 40 runs: random walks {t_iid.mean():+.2f}, regime markets "
+      f"{t_reg.mean():+.2f} (t > 2 in {np.mean(t_reg > 2):.0%} of them)")
+print("=> a good Sharpe can be pure beta; alpha needs real structure, and even")
+print("   then a few years of data rarely prove it.")
 
 # --- heatmap renders on a denser grid ---
 dense = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
@@ -388,4 +441,4 @@ print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + deflated-Sharpe "
       "+ walk-forward + basket + ML signal + vol targeting + long-short + portfolio "
-      "+ survivorship verified.")
+      "+ survivorship + alpha/beta verified.")

@@ -158,6 +158,42 @@ def deflated_sharpe(close, table, cost=0.0):
         probabilistic_sharpe(best, _expected_max_sharpe(per_period))
 
 
+def alpha_beta(strat, bench):
+    """Split a strategy's daily returns into market exposure and skill (CAPM).
+
+    Regresses the strategy's returns on the benchmark's (plain OLS, risk-free
+    rate 0): strat_t = alpha + beta * bench_t + e_t. Returns beta, alpha
+    (annualized), alpha's t-stat, R^2 and the information ratio (annualized
+    alpha over residual volatility, as in Grinold & Kahn).
+
+    The lesson: a return is not an edge until the market is taken out of it.
+    Beta is how much benchmark the strategy carried -- for a long/flat rule on
+    its own asset, roughly the share of days invested, weighted toward the
+    volatile ones -- and alpha is what the timing added on top. A crossover
+    that matches buy-and-hold's Sharpe while sitting out a quarter of the days
+    can have no alpha at all: the same return per unit of risk, just less risk.
+    """
+    df = pd.concat({"s": strat, "b": bench}, axis=1).dropna()
+    s, b, n = df["s"], df["b"], len(df)
+    if n < 3:
+        return {k: np.nan for k in ("Beta", "Alpha", "Alpha t-stat", "R2",
+                                    "Information ratio")}
+    sxx = ((b - b.mean()) ** 2).sum()
+    beta = ((s - s.mean()) * (b - b.mean())).sum() / sxx if sxx else 0.0
+    a = (s - beta * b).mean()                     # daily alpha, the OLS intercept
+    e = s - beta * b - a                          # what the market doesn't explain
+    sig = np.sqrt((e ** 2).sum() / (n - 2))       # residual vol, OLS dof
+    se = sig * np.sqrt(1 / n + (b.mean() ** 2 / sxx if sxx else 0.0))
+    if sig <= 1e-12 * s.std():                    # strat is exactly a + k * bench:
+        sure = 0.0 if abs(a) <= 1e-12 * s.std() else np.copysign(np.inf, a)
+        t = ir = sure                             # no residual risk, so no doubt
+    else:
+        t, ir = a / se, a * np.sqrt(YEAR) / sig
+    sst = ((s - s.mean()) ** 2).sum()
+    return {"Beta": beta, "Alpha": a * YEAR, "Alpha t-stat": t,
+            "R2": 1 - (e ** 2).sum() / sst if sst else 0.0, "Information ratio": ir}
+
+
 def walk_forward(close, fasts, slows, train=4 * YEAR, test=YEAR, cost=0.0):
     """Rolling train/test: pick the best-Sharpe pair in-sample, trade it out-of-sample.
 
@@ -414,6 +450,9 @@ def report(df):
     for k in strat:
         f = "{:.2f}".format if k == "Sharpe" else "{:.1%}".format
         print(f"{k:<16}{f(strat[k]):>12}{f(bh[k]):>12}")
+    ab = alpha_beta(df["strat"], df["ret"])
+    print(f"Beta {ab['Beta']:.2f}   Alpha {ab['Alpha']:+.1%}/yr (t = {ab['Alpha t-stat']:.2f})"
+          f"   R2 {ab['R2']:.2f}")
 
     tr = trade_returns(df)
     if tr.empty:
@@ -488,6 +527,12 @@ def main():
     g, nr = gross["equity"].iloc[-1] - 1, net["equity"].iloc[-1] - 1
     print(f"Cost drag: {g:.1%} gross -> {nr:.1%} net "
           f"over {n} position changes at {0.0005:.2%} each\n")
+
+    # alpha vs beta: how much of that return is just being in the market?
+    ab = alpha_beta(net["strat"], net["ret"])
+    print(f"Alpha vs beta: beta {ab['Beta']:.2f} with {net['position'].mean():.0%} of days "
+          f"invested; alpha {ab['Alpha']:+.1%}/yr at t = {ab['Alpha t-stat']:.2f} -- judge "
+          f"the timing by alpha's t-stat (|t| > 2), not by the Sharpe.\n")
 
     table = sweep(close, [5, 10, 20, 30, 50, 80], [20, 50, 100, 150, 200, 250],
                   cost=0.0005)

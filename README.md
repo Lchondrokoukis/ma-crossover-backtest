@@ -60,6 +60,8 @@ distrust a win rate estimated from a few trades.
 - **Total return / CAGR** — capital growth, total and annualized.
 - **Sharpe ratio** — return per unit of risk (risk-free rate assumed 0).
 - **Max drawdown** — worst peak-to-trough decline.
+- **Beta / alpha** — how much of the market the strategy carried, and what its
+  timing added on top (see Alpha vs beta).
 
 A trend-following strategy often *trails* buy-and-hold in a bull market (it
 sits out part of the upside while the trend "confirms") but *cuts the drawdown*
@@ -149,6 +151,27 @@ cell deflates only from ≈100% to ≈100% (a real edge survives), but on a
 collapses to DSR ≈ 31% once corrected for the ~20 pairs tried. That gap is the
 quantified cost of in-sample optimisation — the same lesson the heatmap shows
 visually, now as a probability.
+
+## Alpha vs beta
+
+`alpha_beta(strat, bench)` regresses the strategy's daily returns on the
+benchmark's (CAPM, plain OLS): **beta** is how much market the strategy
+carried, **alpha** the annualized return left once that is taken out, with its
+t-stat, R² and information ratio (alpha over residual volatility). `report()`
+prints the line under every strategy.
+
+The lesson is that a good Sharpe is not an edge. On the test series the 50/200
+crossover's Sharpe (1.29) matches buy-and-hold's (1.28), yet its beta is 0.74 —
+close to the 72% of days it is invested, weighted toward the volatile ones —
+and its alpha has t = 0.88, nowhere near significant: the same return per unit
+of risk, just less risk. Leverage is beta too: a fixed fraction of the market
+has that fraction as its beta and zero alpha, whatever its return.
+
+Alpha only appears when there is structure to time. Across 40 random walks the
+crossover's alpha t-stat averages −0.14; across 40 markets with persistent
+bull/bear regimes it averages +1.15. And even there a single 6-year sample
+clears t > 2 in only 20% of runs: a real edge is hard to *prove* from a few
+years of daily data, which is the same humility the deflated Sharpe teaches.
 
 ## Multi-asset basket
 
@@ -297,9 +320,9 @@ statistics (`trade_returns()`); parameter sweep with Sharpe heatmap
 multi-asset basket (`basket()`); ML-based signal (`ml_backtest()`);
 volatility targeting (`vol_target()`); long-short positions (`long_short()`);
 portfolio construction with risk-based weighting (`portfolio()`); the
-deflated Sharpe ratio (`deflated_sharpe()`, `probabilistic_sharpe()`); and
+deflated Sharpe ratio (`deflated_sharpe()`, `probabilistic_sharpe()`);
 survivorship-bias control (point-in-time `portfolio()`, `survivors()`,
-`survivorship_bias()`).
+`survivorship_bias()`); and alpha/beta attribution (`alpha_beta()`).
 
 What remains is data, not code: measuring the bias on real markets needs a
 delisting-aware source (e.g. CRSP) that keeps the dead tickers and their
