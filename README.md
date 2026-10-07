@@ -91,7 +91,9 @@ Being explicit about these is what signals quant thinking:
   overfitting. The fix is walk-forward / out-of-sample testing.
 - **Costs are a flat per-trade rate.** Real slippage varies with liquidity and
   order size; this is a simplification.
-- No short selling, leverage, position sizing, or survivorship-bias control.
+- **Survivors-only real data.** The engine handles point-in-time universes
+  (see Survivorship bias), but Yahoo serves only tickers that still trade, so
+  `main()`'s basket is survivors-only and its numbers are flattered.
 
 ## Parameter sweep
 
@@ -236,6 +238,45 @@ return while cancelling part of the idiosyncratic risk. The inverse-vol scheme
 then equalizes *risk* rather than capital, handing more weight to the calmer
 strategies (a property the tests pin directly).
 
+## Survivorship bias
+
+Backtest only the tickers that exist *today* and you have already peeked.
+Whether a name survives is an outcome only the future knows, and the names
+missing from today's list are mostly the ones that collapsed — drop them and
+every average improves, though no investor at the start could have known
+which to skip. Survivorship bias is lookahead in the *universe* rather than in
+the signal.
+
+`survivors(closes)` builds that biased universe on purpose (the names still
+trading on the last date), and `survivorship_bias(closes, fast, slow, cost)`
+runs the same portfolio on it and on the **point-in-time** universe (every
+name that existed at the time, dead ones included), with a Bias row between
+them. `portfolio()` is point-in-time now: each day's weights cover only the
+names with a price that day, so a delisting name is held through its last
+close, final loss included, and its capital moves to the survivors the next
+day. Before, one delisting truncated the whole book — at day 228 of 1500 in
+the test. `basket()` needed no change, since it already runs each name on its
+own dates, but its Average row is only as honest as its rows: on the survivors
+it lifts the average buy-and-hold Sharpe from −0.23 to +0.27.
+
+`test_engine.py` simulates 30 zero-edge stocks (expected return exactly 0)
+that delist at a 30% haircut once they close below 30; 11 die. Point-in-time,
+an equal-weight buy-and-hold returns −5%; the 19 survivors alone show +80% at
+a Sharpe of 1.24 — profit made purely by who was left out. About 14 points of
+that gap are the delisting returns alone: a database that keeps the dead
+tickers but drops their final loss still reports +8%. The crossover dodges
+part of the bias (it was flat on every delisting day), yet its Sharpe still
+rises from 0.46 to 0.92 on the survivors. The test also pins the lookahead
+itself: delete the data after a date and the point-in-time book up to it is
+unchanged, while the survivors-only book moves, because who "survives" was
+decided later.
+
+Only performance delistings are modelled; takeovers also remove names, at a
+premium, so the real-market bias is smaller — these numbers size the
+mechanism, not the market. Yahoo serves no delisted tickers, so `main()`'s
+basket is survivors-only by construction and its measured bias reads zero:
+invisible, not absent.
+
 ## Extensions
 
 The three original extensions plus several follow-ups are done, each as its
@@ -244,11 +285,14 @@ statistics (`trade_returns()`); parameter sweep with Sharpe heatmap
 (`sweep()`, `heatmap()`); walk-forward validation (`walk_forward()`);
 multi-asset basket (`basket()`); ML-based signal (`ml_backtest()`);
 volatility targeting (`vol_target()`); long-short positions (`long_short()`);
-portfolio construction with risk-based weighting (`portfolio()`); and the
-deflated Sharpe ratio (`deflated_sharpe()`, `probabilistic_sharpe()`).
+portfolio construction with risk-based weighting (`portfolio()`); the
+deflated Sharpe ratio (`deflated_sharpe()`, `probabilistic_sharpe()`); and
+survivorship-bias control (point-in-time `portfolio()`, `survivors()`,
+`survivorship_bias()`).
 
-Natural next step: a survivorship-bias-free universe (delisted tickers
-included), to retire the last bias listed under Limitations.
+What remains is data, not code: measuring the bias on real markets needs a
+delisting-aware source (e.g. CRSP) that keeps the dead tickers and their
+delisting returns.
 
 ## Files
 

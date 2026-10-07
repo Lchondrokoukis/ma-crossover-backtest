@@ -5,7 +5,8 @@ import numpy as np
 import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
                       heatmap, walk_forward, basket, ml_backtest, vol_target,
-                      long_short, portfolio, probabilistic_sharpe, deflated_sharpe)
+                      long_short, portfolio, probabilistic_sharpe, deflated_sharpe,
+                      survivors, survivorship_bias)
 
 np.random.seed(42)
 n = 1500
@@ -237,6 +238,78 @@ print(f"\nPortfolio of 6 strategies: avg component Sharpe {np.mean(comp):.2f} ->
 print("=> diversification is the free lunch: the blend's Sharpe tops the "
       "average component's.")
 
+# --- survivorship bias: a universe picked by who exists today peeks ahead ---
+def dying_universe(seed, names=30, floor=30.0, haircut=-0.30):
+    """Fair-game stocks (zero expected daily return) starting at 100, riskier
+    the higher the index. A name that closes below `floor` is delisted the
+    next day at `haircut` to that close (about the average performance-
+    delisting return) and is NaN afterwards."""
+    rng = np.random.default_rng(seed)
+    out = {}
+    for i in range(names):
+        vol = (0.25 + 0.01 * i) / np.sqrt(252)
+        px = pd.Series(100 * np.exp(np.cumsum(rng.normal(-vol ** 2 / 2, vol, n))),
+                       index=close.index)
+        below = np.flatnonzero(px.values[:-2] < floor)   # the death fits in the sample
+        if below.size:
+            px.iloc[below[0] + 1] = px.iloc[below[0]] * (1 + haircut)
+            px.iloc[below[0] + 2:] = np.nan
+        out[f"S{i:02d}"] = px
+    return out
+
+uni = dying_universe(0)
+surv = survivors(uni)
+last = {k: c.last_valid_index() for k, c in uni.items()}
+dead = [k for k in uni if k not in surv]
+# survivors() keeps exactly the names still listed on the final date
+assert dead and all(last[k] == close.index[-1] for k in surv)
+assert all(last[k] < close.index[-1] for k in dead)
+
+# point-in-time portfolio: a delisting no longer truncates the curve, the book
+# stays fully invested, and a dead name is held through its delisting day (its
+# haircut counts) and gets zero weight after it
+pit = portfolio(uni, 50, 200, cost=COST, scheme="equal")
+assert pit.index.equals(close.index)
+assert np.allclose(pit.filter(like="w_").sum(axis=1), 1.0)
+for k in dead:
+    assert pit.loc[last[k], f"w_{k}"] > 0 and (pit.loc[pit.index > last[k], f"w_{k}"] == 0).all()
+# entry side: a late listing gets no capital before its first price
+late = portfolio(dict(pcloses, P0=pcloses["P0"].iloc[300:]), 50, 200, scheme="equal")
+assert late.index.equals(close.index) and (late["w_P0"].iloc[:300] == 0).all()
+
+# survivorship IS lookahead: delete everything after day t and the point-in-time
+# book up to t is unchanged; the survivors-only book is not, because who
+# "survives" is decided by data that arrives after t
+t = max(last[k] for k in dead)
+cut = {k: c.loc[:t] for k, c in uni.items()}
+assert np.allclose(portfolio(cut, 50, 200, cost=COST, scheme="equal")["strat"],
+                   pit["strat"].loc[:t])
+assert not np.allclose(portfolio(survivors(cut), 50, 200, cost=COST, scheme="equal")["strat"],
+                       portfolio(surv, 50, 200, cost=COST, scheme="equal")["strat"].loc[:t])
+
+# the lesson: dropping the dead inflates the backtest -- even basket()'s
+# "judge the Average row" is fooled when the rows were chosen by survival
+sb = survivorship_bias(uni, 50, 200, cost=COST)
+assert sb.loc["Bias", "B&H return"] > 0 and sb.loc["Bias", "B&H Sharpe"] > 0
+# its B&H row is a direct run: an equal-weight hold of the names listed each day
+panel = pd.DataFrame(uni)
+assert np.isclose(sb.loc["Point-in-time", "B&H return"],
+                  metrics((panel / panel.shift() - 1).mean(axis=1).fillna(0.0))["Total return"])
+assert (basket(surv, 50, 200, COST).loc["Average", "B&H Sharpe"]
+        > basket(uni, 50, 200, COST).loc["Average", "B&H Sharpe"])
+# the crossover is usually flat before a name dies, so it dodges part of the bias
+held_dead = np.mean([backtest(uni[k].dropna(), 50, 200)["position"].iloc[-1] for k in dead])
+assert held_dead < 0.5 and sb.loc["Bias", "Strategy Sharpe"] < sb.loc["Bias", "B&H Sharpe"]
+# keeping the dead but dropping their delisting return is a second, quieter bias
+nohc = survivorship_bias(dying_universe(0, haircut=0.0), 50, 200, cost=COST)
+assert nohc.loc["Point-in-time", "B&H return"] > sb.loc["Point-in-time", "B&H return"]
+print(f"\nSurvivorship: {len(dead)} of {len(uni)} zero-edge names delisted; the "
+      f"crossover held {held_dead:.0%} of them on their delisting day")
+print(sb.round(2).to_string())
+print(f"=> survivors alone turn a {sb.loc['Point-in-time', 'B&H return']:+.0%} "
+      f"buy-and-hold into {sb.loc['Survivors only', 'B&H return']:+.0%}; keeping the dead "
+      f"but not their delisting returns still shows {nohc.loc['Point-in-time', 'B&H return']:+.0%}.")
+
 # --- robustness: degenerate inputs are handled cleanly, not cryptically ---
 short = close.iloc[:100]
 for bad in (lambda: walk_forward(short, [10, 20], [50, 100], train=504, test=252),
@@ -266,4 +339,5 @@ print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat 
 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + deflated-Sharpe "
-      "+ walk-forward + basket + ML signal + vol targeting + long-short + portfolio verified.")
+      "+ walk-forward + basket + ML signal + vol targeting + long-short + portfolio "
+      "+ survivorship verified.")

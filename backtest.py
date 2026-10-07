@@ -264,6 +264,12 @@ def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60)
     Returns a DataFrame with the blended `strat`, its `equity`, and one
     `w_<name>` column per asset showing the daily weights.
 
+    The universe is point-in-time: assets need not share a calendar (NaN
+    before a listing or after a delisting), and each day's weights cover only
+    the names with a price that day. A delisting name is held through its last
+    close -- its final loss included -- and its capital moves to the names
+    still trading the next day, instead of one death truncating the curve.
+
     The lesson: diversification is the one free lunch in investing. Blending
     imperfectly correlated strategies keeps the average return but cancels part
     of the idiosyncratic risk, so the portfolio Sharpe is *higher* than the
@@ -272,17 +278,57 @@ def portfolio(closes, fast, slow, cost=0.0, scheme="inverse_vol", vol_window=60)
     assets' volatilities differ.
     """
     strat = pd.DataFrame({name: backtest(c.dropna(), fast, slow, cost)["strat"]
-                          for name, c in closes.items()}).dropna()
+                          for name, c in closes.items()})       # union of dates
     if scheme == "equal":
         w = pd.DataFrame(1.0, index=strat.index, columns=strat.columns)
     elif scheme == "inverse_vol":
         w = (1.0 / strat.rolling(vol_window).std()).shift(1)  # past data only
     else:
         raise ValueError(f"unknown scheme {scheme!r}")
+    w = w.where(strat.notna())                      # point-in-time: listed names only
     w = w.div(w.sum(axis=1), axis=0).fillna(0.0)    # normalize each day to sum 1
     port = (w * strat).sum(axis=1)
     return pd.DataFrame({"strat": port, "equity": (1 + port).cumprod(),
                          **{f"w_{name}": w[name] for name in strat.columns}})
+
+
+def survivors(closes):
+    """Keep only the names still trading on the universe's last date.
+
+    This is the universe you get by downloading today's tickers -- and it is
+    biased, kept here so the bias can be measured. Survival is an outcome
+    nobody knew at the start (the names that collapsed got delisted), so
+    filtering on it is lookahead in disguise: the losers vanish, their final
+    losses with them, and every average looks better than anything an investor
+    could actually have held. The honest test passes every name that existed
+    at the time, dead ones included, to basket() / portfolio().
+    """
+    end = max(c.last_valid_index() for c in closes.values())
+    return {name: c for name, c in closes.items() if c.last_valid_index() == end}
+
+
+def survivorship_bias(closes, fast, slow, cost=0.0, scheme="equal"):
+    """The same portfolio on the point-in-time universe and on its survivors.
+
+    Returns rows "Point-in-time" (every name, dead ones included), "Survivors
+    only" and "Bias" (survivors minus point-in-time), with the crossover
+    portfolio's and an equal-weight buy-and-hold's total return and Sharpe.
+
+    The lesson: survivorship bias is lookahead by another name -- choosing the
+    sample by who exists today lets the outcome pick the test. Buy-and-hold
+    eats the whole bias; the crossover is usually already flat when a name
+    dies, so it dodges part of it, but not the selection itself.
+    """
+    rows = {}
+    for label, u in (("Point-in-time", closes), ("Survivors only", survivors(closes))):
+        s = metrics(portfolio(u, fast, slow, cost, scheme)["strat"])
+        rets = pd.DataFrame({k: c.dropna().pct_change() for k, c in u.items()})
+        b = metrics(rets.mean(axis=1).fillna(0.0))     # equal weight over listed names
+        rows[label] = {"Strategy return": s["Total return"], "Strategy Sharpe": s["Sharpe"],
+                       "B&H return": b["Total return"], "B&H Sharpe": b["Sharpe"]}
+    table = pd.DataFrame(rows).T
+    table.loc["Bias"] = table.loc["Survivors only"] - table.loc["Point-in-time"]
+    return table
 
 
 def vol_target(close, fast, slow, target=0.15, cost=0.0, vol_window=20, max_lev=3.0):
@@ -466,6 +512,14 @@ def main():
     print(f"Inverse-vol portfolio of {len(closes)} assets: Sharpe {pm['Sharpe']:.2f} "
           f"vs avg component {np.mean(comp):.2f} -- diversification lifts the "
           f"risk-adjusted return above any single name on average.\n")
+
+    # survivorship: Yahoo serves only tickers alive today, so this basket is
+    # survivors-only by construction -- the bias is invisible here, not absent
+    sb = survivorship_bias(closes, fast, slow, cost=0.0005)
+    print(f"Survivorship: {len(survivors(closes))} of {len(closes)} tickers trade to "
+          f"the end, so the measured B&H bias reads {sb.loc['Bias', 'B&H return']:+.1%} "
+          f"-- invisible, not absent: free data has no delisted names, so every "
+          f"real-data number above is survivors-only. test_engine.py sizes the bias.\n")
 
     plot(net, fast, slow, ticker)
 
