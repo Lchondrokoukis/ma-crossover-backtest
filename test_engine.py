@@ -435,7 +435,12 @@ assert np.isclose(lt.iloc[0], 1.10 * 1.05 * 1.02 - 1)
 
 # metrics on a flat series has no risk-adjusted return and does not explode
 assert metrics(pd.Series([0.0] * 10))["Sharpe"] == 0.0
-assert np.isfinite(metrics(pd.Series([0.01]))["CAGR"]) or np.isnan(metrics(pd.Series([0.01]))["CAGR"])
+assert np.isnan(metrics(pd.Series([0.01]))["CAGR"])   # one point spans no return
+# an account wiped out along the way compounds to -100% a year, not to NaN
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("error")                      # and quietly, no RuntimeWarning
+    assert metrics(pd.Series([0.0, 0.5, -1.5, 0.1]))["CAGR"] == -1.0
 print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat metrics OK.")
 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")

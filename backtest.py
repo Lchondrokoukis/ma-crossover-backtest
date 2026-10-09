@@ -83,7 +83,9 @@ def metrics(ret):
     CAGR annualizes over the number of return periods (len - 1: the first
     point is the opening mark, not a return). A series with fewer than two
     points spans no return, so the growth metrics are NaN rather than an
-    explosive ``x ** YEAR``.
+    explosive ``x ** YEAR``. An account wiped out along the way (equity at or
+    below zero at the end) has a CAGR of -100%, not the NaN a fractional power
+    of a negative number gives.
     """
     if len(ret) < 2:
         return {"Total return": np.nan, "CAGR": np.nan,
@@ -92,7 +94,8 @@ def metrics(ret):
     sd = ret.std()
     return {
         "Total return": equity.iloc[-1] - 1,
-        "CAGR": equity.iloc[-1] ** (YEAR / (len(ret) - 1)) - 1,
+        "CAGR": (equity.iloc[-1] ** (YEAR / (len(ret) - 1)) - 1
+                 if equity.iloc[-1] > 0 else -1.0),
         "Sharpe": np.sqrt(YEAR) * ret.mean() / sd if sd and np.isfinite(sd) else 0.0,
         "Max drawdown": (equity / equity.cummax() - 1).min(),
     }
