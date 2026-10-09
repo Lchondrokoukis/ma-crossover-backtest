@@ -38,6 +38,34 @@ more often and can bleed double-digit percentage points to the same per-trade
 cost. Note too that a cost paid early compounds away over the rest of the curve,
 so the drag on *final* wealth is larger than the naive sum of per-trade costs.
 
+## Market impact and capacity
+
+A flat cost per trade ignores *size*. `trading_costs(close, volume, trades,
+aum, half_spread, impact)` adds the empirical **square-root law**: an order of
+Q dollars moves the price against itself by about `impact × σ × √(Q / ADV)`,
+σ the daily volatility and ADV the average daily dollar volume, both trailing
+estimates known before the trade. With `impact=0` it is exactly the flat
+`cost` above; the tests pin that 4× the dollars cost 2× as much per dollar and
+that a quarter-size trade costs an eighth.
+
+Because impact per dollar grows with the square root of fund size, every
+strategy has a **capacity**. `capacity(close, volume, fast, slow)` finds the
+size that maximizes dollar profit, in closed form: profit `A·(G − S − K√A)`
+peaks at `√A* = (G − S) / 1.5K`, where impact eats exactly two-thirds of the
+edge left after spreads — growing past it adds dollars of cost faster than
+dollars of return, which is why good funds close to new money. Capacity is
+edge² over trading cost², so it scales linearly with the market's liquidity
+and as 1/impact², and at a given edge turnover is what kills it: on the test
+series, with gross Sharpes of 1.29 and 1.24, the 50/200 crossover (7 trades)
+can run $8.2B and the 5/20 (89 trades) only $29M — 286× less.
+
+The model executes each trade within a day. `capacity()` reports the largest
+day's trade as a multiple of ADV, and above ~0.1 a real desk would spread the
+order over days. At capacity the fast crossover's biggest trade is 0.6× a day's
+volume — a few days of careful execution — but the slow one's is 165×, months
+of the market's entire volume: its capacity is an extrapolation of the model,
+read it as "far more than you will ever run", not as a number.
+
 ## Trade-level statistics
 
 `trade_returns()` extracts every round trip — entry at a 0→1 position change,
@@ -91,8 +119,9 @@ Being explicit about these is what signals quant thinking:
   luck or overfitting. Robustness needs many assets.
 - **Fixed parameters.** Picking 50/200 by what works on the same dataset is
   overfitting. The fix is walk-forward / out-of-sample testing.
-- **Costs are a flat per-trade rate.** Real slippage varies with liquidity and
-  order size; this is a simplification.
+- **One-day execution.** `trading_costs()` sizes impact by liquidity and order
+  size, but charges each trade within a day; orders far above ~10% of daily
+  volume would really be spread over days, so their costs are extrapolated.
 - **Survivors-only real data.** The engine handles point-in-time universes
   (see Survivorship bias), but Yahoo serves only tickers that still trade, so
   `main()`'s basket is survivors-only and its numbers are flattered.
@@ -322,7 +351,8 @@ volatility targeting (`vol_target()`); long-short positions (`long_short()`);
 portfolio construction with risk-based weighting (`portfolio()`); the
 deflated Sharpe ratio (`deflated_sharpe()`, `probabilistic_sharpe()`);
 survivorship-bias control (point-in-time `portfolio()`, `survivors()`,
-`survivorship_bias()`); and alpha/beta attribution (`alpha_beta()`).
+`survivorship_bias()`); alpha/beta attribution (`alpha_beta()`); and market
+impact with capacity (`trading_costs()`, `capacity()`).
 
 What remains is data, not code: measuring the bias on real markets needs a
 delisting-aware source (e.g. CRSP) that keeps the dead tickers and their

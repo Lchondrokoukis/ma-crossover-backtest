@@ -18,11 +18,12 @@ import matplotlib.pyplot as plt
 YEAR = 252  # trading days per year, for annualization
 
 
-def load_prices(ticker, start, end):
-    """Daily split/dividend-adjusted closes from Yahoo Finance, as a Series."""
+def load_prices(ticker, start, end, field="Close"):
+    """Daily split/dividend-adjusted closes from Yahoo Finance, as a Series
+    (or another column, e.g. field="Volume" for shares traded)."""
     df = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
-    close = df["Close"]
-    return close.iloc[:, 0] if isinstance(close, pd.DataFrame) else close
+    col = df[field]
+    return col.iloc[:, 0] if isinstance(col, pd.DataFrame) else col
 
 
 def _equity_frame(close, position, ret, cost, **extra):
@@ -54,6 +55,53 @@ def backtest(close, fast, slow, cost=0.0):
     position = (ma_fast > ma_slow).astype(int).shift(1).fillna(0)
     ret = close.pct_change().fillna(0)
     return _equity_frame(close, position, ret, cost, ma_fast=ma_fast, ma_slow=ma_slow)
+
+
+def trading_costs(close, volume, trades, aum, half_spread=0.0002, impact=1.0, window=20):
+    """Daily trading cost, as a fraction of capital, of running `aum` dollars.
+
+    Charged on each day's traded fraction of capital (`trades`, as in
+    backtest()), in two parts: a half-spread on every dollar traded, and
+    square-root market impact -- an order of Q dollars moves the price against
+    itself by about impact * sigma * sqrt(Q / ADV), sigma the daily volatility
+    and ADV the average daily dollar volume (the "square-root law" measured
+    across equity markets). Sigma and ADV are trailing estimates known before
+    the trade. With impact=0 this is exactly backtest()'s flat `cost`.
+    """
+    sigma = close.pct_change().rolling(window).std().shift(1)
+    adv = (close * volume).rolling(window).mean().shift(1)     # dollars a day
+    return trades * half_spread + (impact * sigma * trades ** 1.5
+                                   * np.sqrt(aum / adv)).fillna(0.0)
+
+
+def capacity(close, volume, fast, slow, half_spread=0.0002, impact=1.0, window=20):
+    """The fund size that maximizes the crossover's dollar profit.
+
+    At size A a day's net return is r_t - s_t - k_t * sqrt(A): the gross
+    return, the spread, and impact growing with the square root of size. Dollar
+    profit A * (G - S - K * sqrt(A)) (G, S, K the daily means) therefore peaks
+    at sqrt(A*) = (G - S) / (1.5 * K) -- a closed form, no search -- where
+    impact eats exactly two-thirds of the edge left after spreads.
+
+    Returns "AUM" (A*, dollars), "Net return" (annualized, at A*), "Profit"
+    (dollars a year at A*) and "Participation" (the largest single day's trade
+    at A*, as a multiple of ADV). Above ~0.1 a real desk would spread the order
+    over days, so read numbers there as an extrapolation of the model.
+
+    The lesson: costs are not a constant. Impact per dollar grows with the
+    square root of size, so every strategy has a capacity -- edge squared over
+    trading cost squared. It scales linearly with the market's liquidity and as
+    1 / impact**2, and at a given edge turnover is what shrinks it.
+    """
+    g = backtest(close, fast, slow)
+    edge = g["strat"].mean() - (g["trades"] * half_spread).mean()
+    k = trading_costs(close, volume, g["trades"], 1.0, 0.0, impact, window).mean()
+    if edge <= 0 or k == 0:                       # no edge after spreads: no size pays
+        return {"AUM": 0.0, "Net return": 0.0, "Profit": 0.0, "Participation": 0.0}
+    a = (edge / (1.5 * k)) ** 2
+    adv = (close * volume).rolling(window).mean().shift(1)
+    return {"AUM": a, "Net return": edge / 3 * YEAR, "Profit": a * edge / 3 * YEAR,
+            "Participation": (g["trades"] * a / adv).max()}
 
 
 def long_short(close, fast, slow, cost=0.0):
@@ -530,6 +578,16 @@ def main():
     g, nr = gross["equity"].iloc[-1] - 1, net["equity"].iloc[-1] - 1
     print(f"Cost drag: {g:.1%} gross -> {nr:.1%} net "
           f"over {n} position changes at {0.0005:.2%} each\n")
+
+    # market impact: how much money can the crossover run before costs eat it?
+    volume = load_prices(ticker, start, end, field="Volume")
+    for f, s in ((fast, slow), (5, 20)):
+        c = capacity(close, volume, f, s)
+        print(f"Capacity MA({f}/{s}): ${c['AUM'] / 1e9:,.1f}B, earning "
+              f"{c['Net return']:.1%}/yr there; its largest day trades "
+              f"{c['Participation']:.1f}x the market's daily volume")
+    print("  impact grows with the square root of size, so turnover -- not the "
+          "signal alone -- sets how much capital a strategy can take.\n")
 
     # alpha vs beta: how much of that return is just being in the market?
     ab = alpha_beta(net["strat"], net["ret"])

@@ -6,7 +6,8 @@ import pandas as pd
 from backtest import (backtest, metrics, report, plot, trade_returns, sweep,
                       heatmap, walk_forward, basket, ml_backtest, vol_target,
                       long_short, portfolio, probabilistic_sharpe, deflated_sharpe,
-                      survivors, survivorship_bias, alpha_beta)
+                      survivors, survivorship_bias, alpha_beta, trading_costs,
+                      capacity)
 
 np.random.seed(42)
 n = 1500
@@ -54,6 +55,53 @@ print(f"5/20  (fast):   {fn} trades, drag {fast_drag:.3%}")
 assert fn > n_trades                                     # fast crossover trades far more
 assert fast_drag > drag, "a higher-turnover strategy must feel costs more"
 print("=> low-turnover strategies barely feel costs; high-turnover ones suffer.")
+
+# --- market impact and capacity: costs grow with the size of the fund ---
+shares = pd.Series(5e5, index=close.index)          # shares a day -> ~$100M ADV
+g50 = backtest(close, 50, 200)
+# with no impact it is exactly the flat per-trade cost of backtest()
+assert np.allclose(g50["strat"] - trading_costs(close, shares, g50["trades"], 1e9, 0.0005,
+                                                impact=0.0),
+                   backtest(close, 50, 200, cost=0.0005)["strat"])
+# the square-root law: trading 4x the dollars costs 2x as much per dollar
+imp = lambda aum: trading_costs(close, shares, g50["trades"], aum, half_spread=0.0)
+assert np.allclose(imp(4e8), 2 * imp(1e8))
+# ...and trading a quarter of the capital costs 1/8 as much: a quarter of the
+# dollars, each moving the price half as far (the 0/1 crossover never shows it)
+quarter = trading_costs(close, shares, g50["trades"] * 0.25, 1e9, half_spread=0.0)
+assert np.allclose(quarter, imp(1e9) / 8)
+# no lookahead: a trade's cost uses only volume and volatility known before it
+t_tr = g50.index[g50["trades"] > 0][1]
+spike = shares.copy()
+spike[t_tr] *= 100
+assert np.isclose(trading_costs(close, spike, g50["trades"], 1e9)[t_tr],
+                  trading_costs(close, shares, g50["trades"], 1e9)[t_tr])
+
+# capacity is the profit-maximizing fund size: half or twice that size earns
+# fewer dollars, and there impact eats exactly 2/3 of the edge left after spreads
+caps = {fs: capacity(close, shares, *fs) for fs in ((50, 200), (20, 100), (5, 20))}
+for fs, cp in caps.items():
+    gfs = backtest(close, *fs)
+    dollars = lambda aum: aum * (gfs["strat"]
+                                 - trading_costs(close, shares, gfs["trades"], aum)).mean()
+    assert dollars(cp["AUM"]) > max(dollars(cp["AUM"] / 2), dollars(cp["AUM"] * 2))
+    edge = gfs["strat"].mean() - (gfs["trades"] * 0.0002).mean()
+    assert np.isclose(cp["Net return"], edge / 3 * 252)
+slow_c, fast_c = caps[(50, 200)], caps[(5, 20)]
+# it scales linearly with the market's liquidity and as 1 / impact^2
+assert np.isclose(capacity(close, 4 * shares, 5, 20)["AUM"], 4 * fast_c["AUM"])
+assert np.isclose(capacity(close, shares, 5, 20, impact=2.0)["AUM"], fast_c["AUM"] / 4)
+# the lesson: at near-equal gross Sharpes, turnover is what kills capacity...
+assert slow_c["AUM"] > caps[(20, 100)]["AUM"] > fast_c["AUM"]
+assert slow_c["AUM"] > 100 * fast_c["AUM"]
+# ...and the slow crossover's capacity is so large that one day's trade would be
+# many days of the market's volume: one-day execution there is extrapolation
+assert slow_c["Participation"] > 1 > fast_c["Participation"]
+print(f"\nCapacity (profit-maximizing size, ~$100M/day market): "
+      + ", ".join(f"MA{fs[0]}/{fs[1]} ${cp['AUM'] / 1e6:,.0f}M" for fs, cp in caps.items()))
+print(f"=> {int(g50['trades'].sum())} trades vs {int(backtest(close, 5, 20)['trades'].sum())}: "
+      f"the slow crossover can run {slow_c['AUM'] / fast_c['AUM']:.0f}x the money; at capacity "
+      f"impact eats 2/3 of the edge (net {fast_c['Net return']:.1%}/yr for the fast one).")
 
 # --- trade-level stats ---
 # flat days contribute nothing, so compounding round-trip returns rebuilds final equity
@@ -441,9 +489,13 @@ import warnings
 with warnings.catch_warnings():
     warnings.simplefilter("error")                      # and quietly, no RuntimeWarning
     assert metrics(pd.Series([0.0, 0.5, -1.5, 0.1]))["CAGR"] == -1.0
+# a strategy with no edge after spreads has zero capacity, not a crash
+down = pd.Series(100 * np.exp(np.cumsum(np.full(n, -0.001))), index=close.index)
+assert capacity(down, shares, 50, 200) == {"AUM": 0.0, "Net return": 0.0,
+                                           "Profit": 0.0, "Participation": 0.0}
 print("\nRobustness: short-series guards, single-class folds, day-0 trade, flat metrics OK.")
 
 plot(net, 50, 200, "SYNTHETIC", outfile="test_plot.png")
 print("\nOK: engine + costs + trade stats + sweep + heatmap + deflated-Sharpe "
       "+ walk-forward + basket + ML signal + vol targeting + long-short + portfolio "
-      "+ survivorship + alpha/beta verified.")
+      "+ survivorship + alpha/beta + capacity verified.")
